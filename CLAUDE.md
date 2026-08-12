@@ -94,10 +94,12 @@ the light palette on a dark surface, where they read as missing rather than mere
      validated **against each other** — the accepted number format depends on the document type
      (NID 10/13/17 digits, passport 9 characters, birth certificate 17 digits). Phone numbers are
      11 digits. Every rule, and where each is enforced, is tabulated in **§8.6**.
-2. **OTP Verification:**
+2. **OTP Verification — currently switched OFF, see §8.9:**
    - OTP delivery over **WhatsApp**, **IMO**, or **SMS via Twilio** — the user picks the channel on the
      verification screen and can re-send over a different one.
    - 6-digit dynamic passcode with 3-minute Redis expiration and rate limiting.
+   - The step is disabled by default (`OTP_VERIFICATION_REQUIRED=false`) because no SMS gateway reaches
+     Bangladeshi numbers reliably yet. Nothing was removed; one variable restores it.
 3. **Rent & Billing Dashboard:**
    - Itemized monthly & annual rent breakdown:
      - Flat Rent
@@ -781,6 +783,36 @@ findable. The UI says which stage produced the rows on screen.
 
 ---
 
+### 8.9 Phone Verification Switch
+
+**Phone verification is currently off.** No SMS route to Bangladeshi numbers works yet — Twilio's US
+long codes are carrier-filtered, and the MobiReach credentials on hand target a retired query-string
+API that now returns `1504 Invalid Parameter` for every request including an empty one. Rather than
+strand every registration behind a code that never arrives, the step is skipped.
+
+Controlled by one variable, `OTP_VERIFICATION_REQUIRED` (default `false`), read through
+`phoneVerificationRequired()` in `config/env.ts` — read at call time, not captured at import, so tests
+exercise both paths in a single run.
+
+With it off:
+
+| | Behaviour |
+| :-- | :-- |
+| Registration | Account created with `isPhoneVerified: true`, no code issued, response carries `otp: null` |
+| Client | `otp: null` sends the user straight to sign-in; `/verify` and its page remain routed |
+| Login | The `PHONE_UNVERIFIED` check is skipped |
+| `requireApprovedTenant` | The verification check is skipped |
+| Admin approval | **Unchanged** — still gates every account |
+
+**The login check and the `requireApprovedTenant` check must stay in step.** They are two separate
+gates on the same condition: if login admits an unverified account and the middleware does not, a
+session is issued and then every request it makes is refused. A test pins this.
+
+**Nothing was deleted.** `otp.service.ts`, the `/auth/send-otp` and `/auth/verify-otp` endpoints, the
+rate limiters, the messaging providers and `VerifyOtpPage` are all intact and still covered — the auth
+spec runs the whole OTP journey with the flag forced on. To re-enable: set the variable to `true`. No
+code change, no migration.
+
 ## 9. Separated Directory Structure
 
 ```
@@ -886,6 +918,16 @@ the UI refused could be set through the API. They now match.
 
 Existing fixtures carried placeholder identity numbers (`NID-1990-000111`) that the new rules reject;
 seed data, test factories and E2E helpers were updated to well-formed numbers.
+
+### 2026-08-12 — Phone verification switched off
+
+No SMS gateway reaches Bangladeshi numbers yet, so `OTP_VERIFICATION_REQUIRED` now defaults to `false`
+and registration skips the code entirely. The OTP service, endpoints, rate limits, messaging providers
+and `/verify` screen are all retained and still tested with the flag forced on. Full behaviour in §8.9.
+
+Worth knowing: verification was gated in **two** places — `login` and `requireApprovedTenant`. Relaxing
+only the first would have issued a session whose every request then 403'd. Both are now behind the same
+helper, with a test pinning them together.
 
 ---
 

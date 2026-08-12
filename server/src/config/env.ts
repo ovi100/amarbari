@@ -13,6 +13,26 @@ function required(name: string, fallback?: string): string {
 
 const isTest = process.env.NODE_ENV === 'test';
 
+/**
+ * Phone verification is currently **switched off** (default `false`).
+ *
+ * No SMS gateway reaches Bangladeshi numbers reliably yet — Twilio's US long
+ * codes get carrier-filtered and the MobiReach credentials on hand target a
+ * retired API. Rather than strand every registration behind a code that never
+ * arrives, the OTP step is skipped: new accounts are created phone-verified and
+ * login does not check the flag.
+ *
+ * **Nothing about the OTP pipeline was removed.** The service, the endpoints,
+ * the rate limits and the verification screen are all intact and covered by
+ * tests. Set `OTP_VERIFICATION_REQUIRED=true` to turn the step back on.
+ *
+ * Read from `process.env` at call time rather than captured at import, so tests
+ * can exercise both paths in one run.
+ */
+export function phoneVerificationRequired(): boolean {
+  return (process.env.OTP_VERIFICATION_REQUIRED ?? 'false') === 'true';
+}
+
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? 'development',
   isProduction: process.env.NODE_ENV === 'production',

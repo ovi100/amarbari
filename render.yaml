@@ -86,6 +86,11 @@ services:
         sync: false
 
       # ---- OTP ----
+      # Phone verification is off until an SMS gateway that reaches Bangladeshi
+      # numbers is in place. The pipeline is retained — flip to "true" to
+      # re-enable. Admin approval still gates access either way.
+      - key: OTP_VERIFICATION_REQUIRED
+        value: "false"
       - key: OTP_TTL_SECONDS
         value: "180"
       - key: OTP_MAX_ATTEMPTS

@@ -10,6 +10,7 @@ import { RegisterValues, registerSchema } from '@/lib/schemas';
 import { IDENTITY_RULES } from '@/lib/identity';
 import { authApi } from '@/services/endpoints';
 import { errorMessage } from '@/services/api';
+import { toast } from '@/store/toast.store';
 import type { IdentityType } from '@/types';
 
 const DIVISIONS = [
@@ -55,6 +56,16 @@ export default function RegisterPage() {
         ...payload,
         dob: payload.dob || undefined,
       });
+
+      // Phone verification is currently switched off server-side, which comes
+      // back as `otp: null`. The screen and its route are still in place, so
+      // re-enabling the step needs no change here.
+      if (!result.otp) {
+        toast.success('Account created', result.message);
+        navigate('/login', { replace: true });
+        return;
+      }
+
       navigate('/verify', {
         state: {
           phone: result.user.phone,
@@ -89,7 +100,7 @@ export default function RegisterPage() {
               <Input id="fullName" autoComplete="name" {...register('fullName')} />
             </Field>
             <Field label="Phone number" htmlFor="phone" error={errors.phone?.message} required
-              hint="Used for OTP over WhatsApp or IMO">
+              hint="How your property admin will reach you">
               <Input id="phone" type="tel" inputMode="tel" placeholder="01712345678" {...register('phone')} />
             </Field>
             <Field label="Date of birth" htmlFor="dob" error={errors.dob?.message}>
@@ -207,7 +218,7 @@ export default function RegisterPage() {
             </Link>
           </p>
           <Button type="submit" loading={isSubmitting} className="sm:w-auto">
-            Create account &amp; send OTP
+            Create account
           </Button>
         </div>
       </form>

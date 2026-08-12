@@ -2,7 +2,10 @@ import { expect, test } from '@playwright/test';
 import { SEED, login, loginAsTenant, navigateTo, uniqueIdentity, uniquePhone } from './helpers';
 
 test.describe('Tenant journey', () => {
-  test('registers with full address details and verifies by OTP', async ({ page }) => {
+  // Phone verification is switched off (OTP_VERIFICATION_REQUIRED), so
+  // registration lands straight on the sign-in screen. The OTP pipeline and its
+  // /verify page are retained; re-enable the flag to restore that leg.
+  test('registers with full address details', async ({ page }) => {
     const phone = uniquePhone();
 
     await page.goto('/register');
@@ -25,18 +28,10 @@ test.describe('Tenant journey', () => {
 
     await page.getByRole('button', { name: /create account/i }).click();
 
-    // Lands on the OTP screen; the dev-mode banner carries the code.
-    await expect(page).toHaveURL(/\/verify/);
-    await expect(page.getByText(/development mode/i)).toBeVisible();
-
-    const code = (await page.locator('.font-mono.text-base').first().textContent())?.trim() ?? '';
-    expect(code).toMatch(/^\d{6}$/);
-
-    await page.getByLabel(/6-digit code/i).fill(code);
-    await page.getByRole('button', { name: /verify phone number/i }).click();
-
-    // Verified but not yet approved by an admin.
+    // Straight to sign-in — no verification step to clear.
     await expect(page).toHaveURL(/\/login/);
+
+    // Registered, but admin approval is still required to get in.
     await page.getByLabel(/phone number/i).fill(phone);
     await page.locator('#password').fill('Str0ngPass1');
     await page.getByRole('button', { name: /sign in/i }).click();

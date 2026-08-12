@@ -37,11 +37,17 @@ export interface RegisterPayload {
 
 export type OtpChannel = 'WHATSAPP' | 'IMO' | 'SMS';
 
+export interface RegisterResult {
+  user: User;
+  /** `null` when phone verification is switched off server-side. */
+  otp: { expiresInSeconds: number; delivered: boolean; devCode?: string } | null;
+  verificationRequired: boolean;
+  message: string;
+}
+
 export const authApi = {
   register: (payload: RegisterPayload) =>
-    unwrap<{ user: User; otp: { expiresInSeconds: number; delivered: boolean; devCode?: string }; message: string }>(
-      api.post('/auth/register', payload)
-    ),
+    unwrap<RegisterResult>(api.post('/auth/register', payload)),
 
   sendOtp: (phone: string, channel: OtpChannel = 'WHATSAPP') =>
     unwrap<{ expiresInSeconds: number; delivered: boolean; devCode?: string; message: string }>(

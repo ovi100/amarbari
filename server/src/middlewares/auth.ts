@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 import { Role } from '@prisma/client';
 import { ApiError } from '../utils/ApiError';
+import { phoneVerificationRequired } from '../config/env';
 import { verifyAccessToken } from '../services/token.service';
 import prisma from '../utils/prisma';
 
@@ -37,8 +38,12 @@ export function requireRole(...roles: Role[]) {
 export const requireAdmin = [requireAuth, requireRole(Role.ADMIN)];
 
 /**
- * Tenants must be both phone-verified and admin-approved before touching
- * rent, ticket or chat resources (SRS 3.2.2).
+ * Tenants must be admin-approved — and, when phone verification is switched on,
+ * verified too — before touching rent, ticket or chat resources (SRS 3.2.2).
+ *
+ * The verification half must stay in step with the same check in `login`. If
+ * login lets an unverified account in and this does not, the session is issued
+ * and then every request it makes is refused.
  */
 export async function requireApprovedTenant(req: Request, _res: Response, next: NextFunction) {
   try {
@@ -50,7 +55,9 @@ export async function requireApprovedTenant(req: Request, _res: Response, next: 
       select: { isApproved: true, isPhoneVerified: true },
     });
     if (!user) throw ApiError.unauthorized('Account no longer exists');
-    if (!user.isPhoneVerified) throw ApiError.forbidden('Phone number is not verified');
+    if (phoneVerificationRequired() && !user.isPhoneVerified) {
+      throw ApiError.forbidden('Phone number is not verified');
+    }
     if (!user.isApproved) throw ApiError.forbidden('Account is pending admin approval');
     next();
   } catch (error) {

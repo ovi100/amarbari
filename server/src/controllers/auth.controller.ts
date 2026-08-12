@@ -4,6 +4,7 @@ import { Role } from '@prisma/client';
 import prisma from '../utils/prisma';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
+import { phoneVerificationRequired } from '../config/env';
 import { issueOtp, verifyOtp } from '../services/otp.service';
 import {
   REFRESH_COOKIE,
@@ -60,20 +61,30 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
   const passwordHash = await bcrypt.hash(input.password, 12);
   const { password, ...profile } = input;
 
+  // With verification off, the account is created already phone-verified so it
+  // is not stranded behind a step nothing can complete.
+  const verificationRequired = phoneVerificationRequired();
+
   const user = await prisma.user.create({
-    data: { ...profile, passwordHash, role: Role.TENANT },
+    data: { ...profile, passwordHash, role: Role.TENANT, isPhoneVerified: !verificationRequired },
     select: publicUser,
   });
 
-  // Kick off phone verification immediately (SRS 3.1.2).
-  const otp = await issueOtp(user.phone, 'WHATSAPP');
+  // Kick off phone verification immediately (SRS 3.1.2), when it is enabled.
+  const otp = verificationRequired ? await issueOtp(user.phone, 'WHATSAPP') : null;
 
   res.status(201).json({
     success: true,
     data: {
       user,
-      otp: { expiresInSeconds: otp.expiresInSeconds, delivered: otp.delivered, devCode: otp.devCode },
-      message: 'Registration received. Verify your phone, then wait for admin approval.',
+      // `null` tells the client to skip the verification screen entirely.
+      otp: otp
+        ? { expiresInSeconds: otp.expiresInSeconds, delivered: otp.delivered, devCode: otp.devCode }
+        : null,
+      verificationRequired,
+      message: verificationRequired
+        ? 'Registration received. Verify your phone, then wait for admin approval.'
+        : 'Registration received. Your account is awaiting admin approval.',
     },
   });
 });
@@ -141,7 +152,8 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) throw ApiError.unauthorized('Phone number or password is incorrect');
 
-  if (!user.isPhoneVerified) {
+  // Skipped while phone verification is switched off — see phoneVerificationRequired().
+  if (phoneVerificationRequired() && !user.isPhoneVerified) {
     throw new ApiError(403, 'Phone number is not verified', 'PHONE_UNVERIFIED');
   }
   if (!user.isApproved && user.role !== Role.ADMIN) {
