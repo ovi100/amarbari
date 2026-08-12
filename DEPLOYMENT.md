@@ -197,13 +197,22 @@ Instead, run the single-purpose bootstrap script from your laptop, pointed at Su
 ```bash
 cd server
 
-DATABASE_URL='<transaction pooler URL from step 2>' \
-DIRECT_URL='<session pooler URL from step 2>' \
+DATABASE_URL='postgresql://…:6543/postgres?pgbouncer=true&connection_limit=1' \
+DIRECT_URL='postgresql://…:5432/postgres' \
 ADMIN_PHONE='01712345678' \
-ADMIN_PASSWORD='<a long unique password>' \
+ADMIN_PASSWORD='a long unique password' \
 ADMIN_NAME='Your Name' \
 npm run create:admin
 ```
+
+Substitute the two URLs from step 2 **inside** the single quotes, replacing the `…` — keep the
+quotes and add no brackets of your own. The single quotes are load-bearing: the `&` in
+`?pgbouncer=true&connection_limit=1` is a shell operator that would otherwise cut the command in
+half.
+
+The script prints `Target database: <host>` before it writes anything. Check that line says
+`…pooler.supabase.com` and not `localhost` — importing Prisma loads `server/.env`, so a
+mistyped variable name falls back to your local database rather than failing.
 
 It creates exactly one `ADMIN` user, pre-approved and phone-verified, and touches nothing else.
 Re-running it with the same phone number resets that admin's password — that is also your

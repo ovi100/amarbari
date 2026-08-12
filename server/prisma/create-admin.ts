@@ -17,6 +17,33 @@ import { phoneSchema, passwordSchema } from '../src/utils/validators';
 
 const prisma = new PrismaClient();
 
+/**
+ * Prisma's own error for a malformed URL points at schema.prisma and buries the
+ * cause. Since this script is normally run with the connection string pasted on
+ * the command line, check it here and name the actual mistake.
+ */
+function assertConnectionUrl(name: string) {
+  const raw = process.env[name];
+  if (!raw) {
+    throw new Error(
+      `${name} is not set. Pass it on the command line, e.g. ${name}='postgresql://…'`
+    );
+  }
+  if (/^["'<\[]|["'>\]]$/.test(raw.trim())) {
+    throw new Error(
+      `${name} still has placeholder or quote characters around it: ${raw.slice(0, 24)}…\n` +
+        "Paste the URL itself, with no surrounding <>, [] or quotes inside the value."
+    );
+  }
+  if (!/^postgres(ql)?:\/\//.test(raw.trim())) {
+    throw new Error(
+      `${name} must start with postgresql:// — got: ${raw.slice(0, 24)}…\n` +
+        'If your shell split the URL, wrap it in single quotes: the "&" in ' +
+        '?pgbouncer=true&connection_limit=1 is a shell operator otherwise.'
+    );
+  }
+}
+
 function env(name: string, fallback?: string): string {
   const value = process.env[name]?.trim() || fallback;
   if (!value) {
@@ -26,6 +53,14 @@ function env(name: string, fallback?: string): string {
 }
 
 async function main() {
+  assertConnectionUrl('DATABASE_URL');
+
+  // Importing @prisma/client loads server/.env, so a forgotten DATABASE_URL
+  // does not fail — it quietly targets the local dev database instead. Always
+  // say which server is about to be written to.
+  const target = new URL(process.env.DATABASE_URL!.trim());
+  console.log(`Target database: ${target.hostname}:${target.port || 5432}`);
+
   const phone = phoneSchema.parse(env('ADMIN_PHONE'));
   const password = passwordSchema.parse(env('ADMIN_PASSWORD'));
   const fullName = env('ADMIN_NAME', 'Property Admin');
