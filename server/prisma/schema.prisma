@@ -1,0 +1,233 @@
+datasource db {
+  provider = "postgresql"
+  // Runtime traffic goes through the connection pooler (Supabase: pgbouncer on
+  // port 6543). Migrations cannot: pgbouncer's transaction mode does not support
+  // the session-level statements DDL needs, so `migrate deploy` uses directUrl.
+  // Locally both point at the same Postgres.
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  ADMIN
+  TENANT
+}
+
+enum IdentityType {
+  NID
+  PASSPORT
+  BIRTH_CERTIFICATE
+}
+
+enum TicketStatus {
+  PENDING
+  IN_PROGRESS
+  RESOLVED
+  REJECTED
+}
+
+enum IssueCategory {
+  WINDOW_BROKEN
+  ELECTRICITY_PROBLEM
+  FAUCET_BROKEN
+  WATER_LEAKAGE
+  OTHER
+}
+
+enum PaymentStatus {
+  PAID
+  DUE
+  PARTIAL
+  DEDUCTED_FROM_ADVANCE
+}
+
+/// Data type of an admin-defined dynamic column (SRS 3.2.1).
+enum DynamicColumnType {
+  STRING
+  NUMBER
+  BOOLEAN
+  DATE
+}
+
+model User {
+  id              String   @id @default(uuid())
+  fullName        String
+  phone           String   @unique
+  passwordHash    String
+  role            Role     @default(TENANT)
+  isPhoneVerified Boolean  @default(false)
+  isApproved      Boolean  @default(false)
+
+  // Profile Details
+  dob            DateTime?
+  familyMembers  Int          @default(1)
+  identityType   IdentityType
+  identityNumber String       @unique
+
+  // Address Breakdown
+  village       String
+  postOffice    String
+  district      String
+  policeStation String
+  division      String
+
+  // Relationships
+  tenancy      Tenancy?
+  tickets      MaintenanceTicket[]
+  messagesSent ChatMessage[]       @relation("SentMessages")
+  messagesRecv ChatMessage[]       @relation("ReceivedMessages")
+
+  /// Admin-defined dynamic columns (SRS 3.2.1).
+  customFields Json @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Flat {
+  id         String  @id @default(uuid())
+  flatNumber String  @unique
+  floor      Int
+  building   String  @default("Main Building")
+  isOccupied Boolean @default(false)
+
+  // Base Pricing Structure
+  baseRent Float
+
+  tenancies Tenancy[]
+  invoices  Invoice[]
+  tickets   MaintenanceTicket[]
+  expenses  BuildingExpense[]
+
+  customFields Json @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Tenancy {
+  id     String @id @default(uuid())
+  userId String @unique
+  flatId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  flat   Flat   @relation(fields: [flatId], references: [id])
+
+  startDate      DateTime  @default(now())
+  endDate        DateTime?
+  advanceDeposit Float     @default(0.0)
+  accumulatedDue Float     @default(0.0)
+  isActive       Boolean   @default(true)
+
+  customFields Json @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([flatId])
+}
+
+model Invoice {
+  id     String @id @default(uuid())
+  flatId String
+  flat   Flat   @relation(fields: [flatId], references: [id])
+  month  Int // 1 - 12
+  year   Int
+
+  // Bill Breakdown
+  flatRent        Float
+  electricityBill Float @default(0.0)
+  waterBill       Float @default(0.0)
+  internetBill    Float @default(0.0)
+  utilityBill     Float @default(0.0)
+  previousDue     Float @default(0.0)
+  totalAmount     Float
+
+  paymentStatus   PaymentStatus @default(DUE)
+  paidAmount      Float         @default(0.0)
+  advanceDeducted Float         @default(0.0)
+  dueDate         DateTime
+  paidAt          DateTime?
+
+  customFields Json @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([flatId, month, year])
+  @@index([year, month])
+}
+
+model BuildingExpense {
+  id          String   @id @default(uuid())
+  flatId      String?
+  flat        Flat?    @relation(fields: [flatId], references: [id])
+  category    String // e.g. "Electricity", "Water Maintenance", "Internet Trunk"
+  amount      Float
+  description String?
+  expenseDate DateTime @default(now())
+
+  customFields Json @default("{}")
+
+  createdAt DateTime @default(now())
+
+  @@index([expenseDate])
+}
+
+model MaintenanceTicket {
+  id          String        @id @default(uuid())
+  userId      String
+  flatId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  flat        Flat          @relation(fields: [flatId], references: [id])
+  category    IssueCategory
+  description String
+  imageUrl    String?
+  status      TicketStatus  @default(PENDING)
+
+  customFields Json @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+}
+
+model ChatMessage {
+  id         String  @id @default(uuid())
+  senderId   String
+  receiverId String
+  sender     User    @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver   User    @relation("ReceivedMessages", fields: [receiverId], references: [id], onDelete: Cascade)
+  message    String
+  isBot      Boolean @default(false)
+  read       Boolean @default(false)
+
+  customFields Json @default("{}")
+
+  createdAt DateTime @default(now())
+
+  @@index([senderId, receiverId])
+}
+
+/// Metadata registry backing SRS 3.2.1 "Dynamic Database Column & Schema Management".
+/// Admin-created columns are stored as keys inside each model's `customFields` JSONB
+/// blob rather than as physical DDL columns, so schema extension needs no migration
+/// and cannot corrupt the relational core.
+model DynamicColumn {
+  id           String            @id @default(uuid())
+  tableName    String
+  columnName   String
+  label        String
+  type         DynamicColumnType @default(STRING)
+  required     Boolean           @default(false)
+  defaultValue String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tableName, columnName])
+}

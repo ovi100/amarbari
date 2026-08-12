@@ -1,0 +1,178 @@
+# AmarBari — Render blueprint
+#
+# Three services: the Express API, a Key Value (Redis) cache, and the static SPA.
+# Postgres is NOT defined here — it lives on Supabase and is wired in via
+# DATABASE_URL / DIRECT_URL. See DEPLOYMENT.md for the full walkthrough.
+#
+# Every `sync: false` var must be filled in by hand (Render prompts for them when
+# the blueprint is applied); everything else is set or generated automatically.
+
+services:
+  # ---------------------------------------------------------------- API ----
+  - type: web
+    name: amarbari-api
+    runtime: node
+    plan: starter
+    region: singapore
+    rootDir: server
+    # `prisma generate` must run on the build machine — the client is generated
+    # into node_modules and is not committed.
+    buildCommand: npm ci && npx prisma generate && npm run build
+    # Migrations run after the build, before traffic is switched over, so a
+    # failed migration aborts the deploy instead of half-serving a new schema.
+    preDeployCommand: npx prisma migrate deploy
+    startCommand: npm run start
+    healthCheckPath: /api/v1/health
+    autoDeploy: true
+
+    # Maintenance-ticket photos are written to disk by multer. Without this the
+    # container filesystem is ephemeral and every deploy would drop them.
+    disk:
+      name: amarbari-uploads
+      mountPath: /var/data/uploads
+      sizeGB: 1
+
+    envVars:
+      # Matches .github/workflows/test.yml, so CI and production agree.
+      - key: NODE_VERSION
+        value: '22'
+      - key: NODE_ENV
+        value: production
+
+      # ---- Supabase Postgres ----
+      # DATABASE_URL  = Transaction pooler (port 6543) + ?pgbouncer=true&connection_limit=1
+      # DIRECT_URL    = Session pooler   (port 5432) — used only by `migrate deploy`
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+
+      # ---- Redis ----
+      # Wired to the Key Value service below; no manual value needed.
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: amarbari-cache
+          property: connectionString
+      # Production must fail loudly rather than silently degrade to the
+      # in-process store, which would make OTPs and token revocation
+      # per-instance instead of global.
+      - key: REDIS_OPTIONAL
+        value: 'false'
+
+      # ---- Auth ----
+      # Render generates these once and keeps them stable across deploys.
+      # Rotating either one invalidates all existing tokens of that kind.
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: JWT_ACCESS_TTL
+        value: 15m
+      - key: JWT_REFRESH_TTL
+        value: 7d
+      - key: JWT_REFRESH_TTL_SECONDS
+        value: '604800'
+
+      # ---- CORS ----
+      # The static site's URL, e.g. https://amarbari-web.onrender.com
+      # (plus any custom domain, comma separated). Set after first deploy.
+      - key: CORS_ORIGINS
+        sync: false
+
+      # ---- OTP ----
+      - key: OTP_TTL_SECONDS
+        value: '180'
+      - key: OTP_MAX_ATTEMPTS
+        value: '5'
+      - key: OTP_RESEND_WINDOW_SECONDS
+        value: '60'
+
+      # ---- Messaging ----
+      # MUST NOT stay `console` in production: with NODE_ENV=production the code
+      # is no longer echoed in the API response, so a console provider means
+      # nobody can ever complete phone verification.
+      - key: MESSAGING_PROVIDER
+        sync: false
+      - key: ULTRAMSG_INSTANCE_ID
+        sync: false
+      - key: ULTRAMSG_TOKEN
+        sync: false
+      - key: GREEN_API_INSTANCE_ID
+        sync: false
+      - key: GREEN_API_TOKEN
+        sync: false
+      - key: MESSAGING_WEBHOOK_URL
+        sync: false
+
+      # ---- Rate limits (strict production defaults) ----
+      - key: RATE_LIMIT_GENERAL
+        value: '600'
+      - key: RATE_LIMIT_AUTH
+        value: '20'
+      - key: RATE_LIMIT_OTP
+        value: '5'
+
+      # ---- Uploads ----
+      # Must match the disk mountPath above.
+      - key: UPLOAD_DIR
+        value: /var/data/uploads
+      - key: UPLOAD_MAX_BYTES
+        value: '5242880'
+      - key: UPLOAD_PUBLIC_BASE_URL
+        value: /uploads
+
+      # ---- Invoices ----
+      - key: INVOICE_CURRENCY
+        value: BDT
+      - key: ADMIN_SIGNATURE_NAME
+        sync: false
+
+  # -------------------------------------------------------------- Cache ----
+  - type: keyvalue
+    name: amarbari-cache
+    plan: starter
+    region: singapore
+    # OTP codes and the refresh-token blacklist both carry their own TTLs.
+    # Eviction under memory pressure would silently un-revoke a blacklisted
+    # refresh token, so the cache must reject writes instead of evicting.
+    maxmemoryPolicy: noeviction
+    # Empty list = reachable only from inside the Render private network.
+    ipAllowList: []
+
+  # ----------------------------------------------------------------- SPA ----
+  - type: web
+    name: amarbari-web
+    runtime: static
+    region: singapore
+    rootDir: client
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    autoDeploy: true
+
+    # Vite inlines these at build time, so changing one requires a rebuild,
+    # not just a restart. Point both at the API service's URL.
+    #   VITE_API_URL    = https://amarbari-api.onrender.com/api/v1
+    #   VITE_SOCKET_URL = https://amarbari-api.onrender.com
+    envVars:
+      # Matches .github/workflows/test.yml, so CI and production agree.
+      - key: NODE_VERSION
+        value: '22'
+      - key: VITE_API_URL
+        sync: false
+      - key: VITE_SOCKET_URL
+        sync: false
+      - key: VITE_CURRENCY
+        value: BDT
+
+    headers:
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+
+    # Client-side routing: every unmatched path must fall through to the SPA
+    # shell, or a hard refresh on /admin/analytics returns 404.
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

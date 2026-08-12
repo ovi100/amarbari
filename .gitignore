@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Environment — .env.example files are committed, real .env files are not
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Runtime artefacts
+server/uploads/
+!server/uploads/.gitkeep
+coverage/
+*.log
+npm-debug.log*
+
+# Playwright
+e2e/test-results/
+e2e/playwright-report/
+e2e/blob-report/
+e2e/.cache/
+
+# Prisma
+server/prisma/*.db
+server/prisma/migrations/dev.db*
+
+# Editors & OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp

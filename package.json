@@ -1,0 +1,27 @@
+{
+  "name": "amar-bari",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AmarBari (আমার বাড়ি) — property & rent management platform",
+  "scripts": {
+    "install:all": "npm --prefix server install && npm --prefix client install && npm --prefix e2e install",
+    "infra:up": "docker compose up -d",
+    "infra:down": "docker compose down",
+    "db:migrate": "npm --prefix server run prisma:migrate",
+    "db:seed": "npm --prefix server run seed",
+    "db:reset": "cd server && npx prisma migrate reset --force",
+    "setup": "npm run install:all && npm run infra:up && npm run db:migrate && npm run db:seed",
+    "dev:server": "npm --prefix server run dev",
+    "dev:client": "npm --prefix client run dev",
+    "build": "npm --prefix server run build && npm --prefix client run build",
+    "test": "npm --prefix server run test && npm --prefix client run test",
+    "test:server": "npm --prefix server run test",
+    "test:client": "npm --prefix client run test",
+    "e2e:playwright": "cd e2e && npx playwright test",
+    "e2e:install": "cd e2e && npx playwright install --with-deps",
+    "typecheck": "npm --prefix server run typecheck && npm --prefix client run typecheck"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
