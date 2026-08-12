@@ -14,10 +14,12 @@ other's URL), so the first deploy intentionally happens twice.
 You need accounts on GitHub, Supabase and Render, and a WhatsApp gateway account
 (UltraMsg or Green API) — see [step 6](#6-messaging-the-one-that-will-bite-you).
 
-Pick **one region and stay in it**. Every hop between Render and Supabase is a round trip on
-every request, so put the Supabase project and both Render services in the same place.
-`render.yaml` is set to `singapore`, the closest Render region to Bangladesh; Supabase's
-`ap-southeast-1` (Singapore) matches it. If you change one, change all three.
+Pick **one region and stay in it**. Every API query crosses from Render to Supabase and back,
+so the two must sit together. `render.yaml` puts the API and the cache in `singapore`, the
+closest Render region to Bangladesh; Supabase's `ap-southeast-1` (Singapore) matches it. Change
+one and you must change all three.
+
+The static site has no region — Render serves it from a global CDN — so it is unaffected.
 
 ---
 
@@ -91,7 +93,7 @@ Three things here are easy to get wrong and each produces a confusing failure:
 ## 3. Apply the Render blueprint
 
 In Render: **New → Blueprint**, pick the GitHub repo, and Render reads `render.yaml`. It will
-create three services (`amarbari-api`, `amarbari-cache`, `amarbari-web`) and prompt for every
+create three services (`amarbari-api`, `amarbari-cache`, `amarbari`) and prompt for every
 value marked `sync: false`.
 
 Fill in what you can now and leave the rest blank — you will come back for them in step 5:
@@ -118,7 +120,7 @@ and produce a working-but-misconfigured SPA that points at `localhost`.
 After the first deploy, Render assigns:
 
 - API: `https://amarbari-api.onrender.com`
-- SPA: `https://amarbari-web.onrender.com`
+- SPA: `https://amarbari.onrender.com`
 
 Your subdomains may differ if the names were taken. Use the real ones below.
 
@@ -129,17 +131,17 @@ Your subdomains may differ if the names were taken. Use the real ones below.
 **On `amarbari-api`** → Environment:
 
 ```
-CORS_ORIGINS = https://amarbari-web.onrender.com
+CORS_ORIGINS = https://amarbari.onrender.com
 ```
 
-**On `amarbari-web`** → Environment:
+**On `amarbari`** → Environment:
 
 ```
 VITE_API_URL    = https://amarbari-api.onrender.com/api/v1
 VITE_SOCKET_URL = https://amarbari-api.onrender.com
 ```
 
-Now **redeploy `amarbari-web`**. This is not optional and not obvious: Vite inlines
+Now **redeploy `amarbari`**. This is not optional and not obvious: Vite inlines
 `VITE_*` variables into the JavaScript bundle at build time, so changing them on a static site
 does nothing until the site is rebuilt. Restarting is not enough.
 
