@@ -66,7 +66,7 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
   const verificationRequired = phoneVerificationRequired();
 
   const user = await prisma.user.create({
-    data: { ...profile, passwordHash, role: Role.TENANT, isPhoneVerified: !verificationRequired },
+    data: { ...profile, passwordHash, role: Role.USER, isPhoneVerified: !verificationRequired },
     select: publicUser,
   });
 

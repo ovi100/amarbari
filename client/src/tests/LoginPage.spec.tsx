@@ -35,7 +35,7 @@ describe('LoginPage', () => {
     await waitFor(() => {
       expect(useAuthStore.getState().accessToken).toBe('test-access-token');
     });
-    expect(useAuthStore.getState().user?.role).toBe('TENANT');
+    expect(useAuthStore.getState().user?.role).toBe('USER');
     expect(navigate).toHaveBeenCalledWith('/app', { replace: true });
   });
 

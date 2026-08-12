@@ -15,9 +15,11 @@ import {
   flatSchema,
   idParamSchema,
   listQuerySchema,
+  shopSchema,
   tableQuerySchema,
   tenancySchema,
   updateFlatSchema,
+  updateShopSchema,
   updateTenancySchema,
   userListQuerySchema,
 } from '../utils/validators';
@@ -66,6 +68,26 @@ router.post(
 );
 router.delete('/flats/:id/tenancy', validate(idParamSchema, 'params'), admin.releaseFlat);
 router.delete('/flats/:id', validate(idParamSchema, 'params'), admin.deleteFlat);
+
+// --- Shops -----------------------------------------------------------------
+// Mirrors the flat routes: a shop is the other rent category, with the same
+// one-user-per-unit invariant (which spans both tables).
+router.get('/shops', admin.listShops);
+router.post('/shops', validate(shopSchema), admin.createShop);
+router.patch(
+  '/shops/:id',
+  validate(idParamSchema, 'params'),
+  validate(updateShopSchema),
+  admin.updateShop
+);
+router.post(
+  '/shops/:id/tenancy',
+  validate(idParamSchema, 'params'),
+  validate(assignFlatSchema),
+  admin.assignShop
+);
+router.delete('/shops/:id/tenancy', validate(idParamSchema, 'params'), admin.releaseShop);
+router.delete('/shops/:id', validate(idParamSchema, 'params'), admin.deleteShop);
 
 // --- Tenancies -------------------------------------------------------------
 router.post('/tenancies', validate(tenancySchema), admin.createTenancy);

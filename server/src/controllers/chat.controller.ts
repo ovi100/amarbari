@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { Role } from '@prisma/client';
 import prisma from '../utils/prisma';
+import { describeUnitOrNull } from '../services/unit.service';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import { emitToAdmins, emitToUser } from '../sockets';
@@ -60,10 +61,10 @@ export const postMessage = asyncHandler(async (req: Request, res: Response) => {
 
   emitToUser(receiverId, 'chat:message', saved);
   emitToUser(me.id, 'chat:message', saved);
-  if (me.role === Role.TENANT) emitToAdmins('chat:message', saved);
+  if (me.role === Role.USER) emitToAdmins('chat:message', saved);
 
   let botMessage = null;
-  if (me.role === Role.TENANT) {
+  if (me.role === Role.USER) {
     const reply = await getBotReply(me.id, req.body.message);
     if (reply) {
       botMessage = await prisma.chatMessage.create({
@@ -83,12 +84,17 @@ export const listConversations = asyncHandler(async (req: Request, res: Response
   const adminId = req.user!.id;
 
   const tenants = await prisma.user.findMany({
-    where: { role: Role.TENANT, isApproved: true },
+    where: { role: Role.USER, isApproved: true },
     select: {
       id: true,
       fullName: true,
       phone: true,
-      tenancy: { select: { flat: { select: { flatNumber: true } } } },
+      tenancy: {
+        select: {
+          flat: { select: { flatNumber: true, building: true } },
+          shop: { select: { shopNumber: true, shopName: true, address: true } },
+        },
+      },
     },
     orderBy: { fullName: 'asc' },
   });
@@ -110,7 +116,7 @@ export const listConversations = asyncHandler(async (req: Request, res: Response
         }),
       ]);
       return {
-        tenant: { ...tenant, flatNumber: tenant.tenancy?.flat.flatNumber ?? null },
+        tenant: { ...tenant, flatNumber: describeUnitOrNull(tenant.tenancy ?? {})?.number ?? null },
         lastMessage,
         unread,
       };

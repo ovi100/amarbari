@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { LoadingState } from '@/components/ui/feedback';
 import { authApi } from '@/services/endpoints';
+import { unitOf } from '@/lib/unit';
 import { formatDate, formatMoney, humanise } from '@/lib/utils';
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
@@ -20,6 +21,9 @@ export default function ProfilePage() {
   const { data, isLoading } = useQuery({ queryKey: ['auth', 'me'], queryFn: authApi.me });
 
   if (isLoading || !data) return <LoadingState label="Loading your profile…" />;
+
+  // A tenancy is on a flat or a shop — `unitOf` resolves whichever it is.
+  const unit = unitOf(data.tenancy);
 
   return (
     <>
@@ -100,15 +104,18 @@ export default function ProfilePage() {
         <Card>
           <CardHeader>
             <CardTitle>Tenancy</CardTitle>
-            <CardDescription>Your current flat allocation</CardDescription>
+            <CardDescription>Your current unit allocation</CardDescription>
           </CardHeader>
           <CardContent>
             {data.tenancy ? (
               <dl>
-                <Row label="Flat" value={data.tenancy.flat.flatNumber} />
-                <Row label="Floor" value={data.tenancy.flat.floor} />
-                <Row label="Building" value={data.tenancy.flat.building} />
-                <Row label="Base rent" value={formatMoney(data.tenancy.flat.baseRent)} />
+                {/* A tenancy is on a flat or a shop — `unitOf` resolves either. */}
+                <Row
+                  label={unit?.category === 'SHOP' ? 'Shop' : 'Flat'}
+                  value={unit?.label ?? '—'}
+                />
+                <Row label="Location" value={unit?.location ?? '—'} />
+                <Row label="Base rent" value={formatMoney(unit?.baseRent)} />
                 <Row label="Moved in" value={formatDate(data.tenancy.startDate)} />
                 <Row label="Advance deposit" value={formatMoney(data.tenancy.advanceDeposit)} />
                 <Row label="Carried-over due" value={formatMoney(data.tenancy.accumulatedDue)} />

@@ -196,6 +196,28 @@ export const flatSchema = z.object({
 });
 export type FlatValues = z.infer<typeof flatSchema>;
 
+/** A shop is identified by a trading name, a unit number and a street address. */
+export const shopSchema = z.object({
+  shopName: z
+    .string()
+    .trim()
+    .min(2, 'Shop name is required')
+    .max(120, 'Shop name is too long')
+    .refine((v) => /\p{L}|\p{N}/u.test(v), 'Enter a valid shop name'),
+  shopNumber: z
+    .string()
+    .trim()
+    .min(1, 'Shop number is required')
+    .max(20, 'Shop number is too long')
+    .regex(/^[\p{L}\p{N}][\p{L}\p{N}\s/-]*$/u, 'Use letters, digits, spaces, - or / only'),
+  address: z.string().trim().min(5, 'Address is required').max(240, 'Address is too long'),
+  baseRent: z.coerce
+    .number({ invalid_type_error: 'Base rent is required' })
+    .positive('Base rent must be greater than zero')
+    .max(MAX_AMOUNT, 'That rent looks wrong'),
+});
+export type ShopValues = z.infer<typeof shopSchema>;
+
 /** Sentinel for "none of the listed categories fits" in the expense form. */
 export const CUSTOM_EXPENSE_CATEGORY = '__custom__';
 
@@ -261,8 +283,28 @@ const invoiceLineItems = {
   utilityBill: requiredAmount('Utility & service charge'),
 };
 
+/** Which charges an invoice carries depends on the unit type. */
+export const INVOICE_LINE_ITEMS = {
+  FLAT: ['flatRent', 'electricityBill', 'waterBill', 'internetBill', 'utilityBill'],
+  SHOP: ['flatRent', 'electricityBill', 'serviceCharge', 'maintenanceCharge'],
+} as const;
+
+export const LINE_ITEM_LABELS: Record<string, string> = {
+  flatRent: 'Rent',
+  electricityBill: 'Electricity',
+  waterBill: 'Water',
+  internetBill: 'Internet',
+  utilityBill: 'Utility & service',
+  serviceCharge: 'Service charge',
+  maintenanceCharge: 'Maintenance charge',
+  previousDue: 'Previous due',
+};
+
+export type RentCategoryValue = keyof typeof INVOICE_LINE_ITEMS;
+
 export const invoiceSchema = z.object({
-  flatId: z.string().uuid('Choose a flat'),
+  category: z.enum(['FLAT', 'SHOP']),
+  unitId: z.string().uuid('Choose a unit'),
   month: z.coerce
     .number({ invalid_type_error: 'Choose a month' })
     .int()
@@ -274,12 +316,16 @@ export const invoiceSchema = z.object({
     .min(2000, 'Year must be 2000 or later')
     .max(2100, 'Year must be 2100 or earlier'),
   ...invoiceLineItems,
+  serviceCharge: requiredAmount('Service charge'),
+  maintenanceCharge: requiredAmount('Maintenance charge'),
   dueDate: dateField('Due date'),
 });
 export type InvoiceValues = z.infer<typeof invoiceSchema>;
 
 export const invoiceEditSchema = z.object({
   ...invoiceLineItems,
+  serviceCharge: requiredAmount('Service charge'),
+  maintenanceCharge: requiredAmount('Maintenance charge'),
   previousDue: requiredAmount('Previous due'),
   dueDate: dateField('Due date'),
 });
@@ -335,7 +381,7 @@ export function buildUserSchema(mode: 'create' | 'edit') {
         .max(30, 'That seems too high'),
       ...identityFields,
       ...addressFields,
-      role: z.enum(['ADMIN', 'TENANT']),
+      role: z.enum(['ADMIN', 'USER']),
       isApproved: z.boolean(),
       isPhoneVerified: z.boolean(),
     })

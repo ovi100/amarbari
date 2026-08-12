@@ -30,6 +30,7 @@ import {
   tenancySchema,
 } from '@/lib/schemas';
 import { IDENTITY_RULES } from '@/lib/identity';
+import { unitOf } from '@/lib/unit';
 import type { IdentityType, User } from '@/types';
 
 type Filter = 'all' | 'pending' | 'approved';
@@ -52,7 +53,7 @@ const blankUser: AdminUserValues = {
   district: '',
   policeStation: '',
   division: 'Dhaka',
-  role: 'TENANT',
+  role: 'USER',
   isApproved: true,
   isPhoneVerified: true,
 };
@@ -238,13 +239,14 @@ export default function UsersPage() {
         ),
       },
       {
-        id: 'flat',
-        header: 'Flat',
-        sortValue: (user) => user.tenancy?.flat.flatNumber ?? null,
+        id: 'unit',
+        header: 'Unit',
+        sortValue: (user) => unitOf(user.tenancy)?.number ?? null,
         cell: (user) =>
           user.tenancy ? (
             <>
-              <p className="text-sm font-medium">{user.tenancy.flat.flatNumber}</p>
+              {/* A user holds a flat or a shop — one label covers both. */}
+              <p className="text-sm font-medium">{unitOf(user.tenancy)?.label ?? '—'}</p>
               <p className="text-xs text-muted-foreground">
                 Advance {formatMoney(user.tenancy.advanceDeposit)}
               </p>
@@ -319,7 +321,7 @@ export default function UsersPage() {
                   user.policeStation,
                   user.district,
                   user.division,
-                  user.tenancy?.flat.flatNumber ?? '',
+                  unitOf(user.tenancy)?.label ?? '',
                 ].join(' ')
               }
               onServerSearch={async (query) => (await adminApi.users({ search: query })).users}
@@ -402,7 +404,7 @@ export default function UsersPage() {
               </Field>
               <Field label="Role" htmlFor="role" error={userForm.formState.errors.role?.message} required>
                 <Select id="role" {...userForm.register('role')}>
-                  <option value="TENANT">Tenant</option>
+                  <option value="USER">Resident / shopkeeper</option>
                   <option value="ADMIN">Property admin</option>
                 </Select>
               </Field>

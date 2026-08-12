@@ -11,6 +11,7 @@ import type {
   MaintenanceTicket,
   Pagination,
   RentSummary,
+  Shop,
   TableDescriptor,
   TablePage,
   Tenancy,
@@ -105,13 +106,17 @@ export const invoiceApi = {
       waterBill?: number;
       internetBill?: number;
       utilityBill?: number;
+      serviceCharge?: number;
+      maintenanceCharge?: number;
       previousDue?: number;
       dueDate?: string;
     }
   ) => unwrap<Invoice>(api.patch(`/invoices/${id}`, payload)),
 
   create: (payload: {
-    flatId: string;
+    /** Exactly one of these — the API rejects both or neither. */
+    flatId?: string;
+    shopId?: string;
     month: number;
     year: number;
     flatRent?: number;
@@ -119,6 +124,8 @@ export const invoiceApi = {
     waterBill?: number;
     internetBill?: number;
     utilityBill?: number;
+    serviceCharge?: number;
+    maintenanceCharge?: number;
     dueDate?: string;
   }) => unwrap<Invoice>(api.post('/invoices', payload)),
 
@@ -184,7 +191,7 @@ export interface AdminUserPayload {
   district: string;
   policeStation: string;
   division: string;
-  role?: 'ADMIN' | 'TENANT';
+  role?: 'ADMIN' | 'USER';
   isApproved?: boolean;
   isPhoneVerified?: boolean;
 }
@@ -195,7 +202,7 @@ export const adminApi = {
       page?: number;
       pageSize?: number;
       status?: 'pending' | 'approved';
-      role?: 'ADMIN' | 'TENANT';
+      role?: 'ADMIN' | 'USER';
       search?: string;
     } = {}
   ) =>
@@ -236,6 +243,31 @@ export const adminApi = {
   ) => unwrap<Tenancy>(api.post(`/admin/flats/${flatId}/tenancy`, payload)),
 
   releaseFlat: (flatId: string) => unwrap<Tenancy>(api.delete(`/admin/flats/${flatId}/tenancy`)),
+
+  // --- Shops ----------------------------------------------------------------
+  shops: (params: { search?: string } = {}) => unwrap<Shop[]>(api.get('/admin/shops', { params })),
+
+  createShop: (payload: {
+    shopName: string;
+    shopNumber: string;
+    address: string;
+    baseRent: number;
+  }) => unwrap<Shop>(api.post('/admin/shops', payload)),
+
+  updateShop: (
+    id: string,
+    payload: { shopName?: string; shopNumber?: string; address?: string; baseRent?: number }
+  ) => unwrap<Shop>(api.patch(`/admin/shops/${id}`, payload)),
+
+  deleteShop: (id: string) => unwrap<{ deleted: string }>(api.delete(`/admin/shops/${id}`)),
+
+  /** Assigns a user to a shop. One unit per user, across both categories. */
+  assignShop: (
+    shopId: string,
+    payload: { userId: string; advanceDeposit?: number; startDate?: string }
+  ) => unwrap<Tenancy>(api.post(`/admin/shops/${shopId}/tenancy`, payload)),
+
+  releaseShop: (shopId: string) => unwrap<Tenancy>(api.delete(`/admin/shops/${shopId}/tenancy`)),
 
   createTenancy: (payload: {
     userId: string;

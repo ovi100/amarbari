@@ -95,7 +95,7 @@ export function initSockets(httpServer: HttpServer): Server {
 
     logger.debug(`socket connected: ${user.id} (${user.role})`);
     socket.emit('connection:ready', { userId: user.id, role: user.role });
-    if (user.role === Role.TENANT) emitToAdmins('presence:online', { userId: user.id });
+    if (user.role === Role.USER) emitToAdmins('presence:online', { userId: user.id });
 
     socket.on('chat:send', async (raw: unknown, ack?: (res: unknown) => void) => {
       try {
@@ -106,7 +106,7 @@ export function initSockets(httpServer: HttpServer): Server {
 
         // Tenants always talk to the property admin, whoever they addressed.
         const receiverId =
-          user.role === Role.TENANT ? await resolveAdminId() : payload.receiverId ?? null;
+          user.role === Role.USER ? await resolveAdminId() : payload.receiverId ?? null;
         if (!receiverId) throw new Error('No recipient available');
 
         const saved = await prisma.chatMessage.create({
@@ -115,11 +115,11 @@ export function initSockets(httpServer: HttpServer): Server {
         });
 
         io!.to(userRoom(user.id)).to(userRoom(receiverId)).emit('chat:message', saved);
-        if (user.role === Role.TENANT) emitToAdmins('chat:message', saved);
+        if (user.role === Role.USER) emitToAdmins('chat:message', saved);
         ack?.({ success: true, data: saved });
 
         // Chatbot answers known keywords before a human picks the thread up.
-        if (user.role === Role.TENANT) {
+        if (user.role === Role.USER) {
           const reply = await getBotReply(user.id, message);
           if (reply) {
             const botMessage = await prisma.chatMessage.create({
@@ -146,7 +146,7 @@ export function initSockets(httpServer: HttpServer): Server {
 
     socket.on('chat:typing', (raw: unknown) => {
       const { receiverId } = (raw ?? {}) as { receiverId?: string };
-      const target = user.role === Role.TENANT ? ADMIN_ROOM : receiverId && userRoom(receiverId);
+      const target = user.role === Role.USER ? ADMIN_ROOM : receiverId && userRoom(receiverId);
       if (target) io!.to(target).emit('chat:typing', { userId: user.id });
     });
 
@@ -161,7 +161,7 @@ export function initSockets(httpServer: HttpServer): Server {
     });
 
     socket.on('disconnect', () => {
-      if (user.role === Role.TENANT) emitToAdmins('presence:offline', { userId: user.id });
+      if (user.role === Role.USER) emitToAdmins('presence:offline', { userId: user.id });
       logger.debug(`socket disconnected: ${user.id}`);
     });
   });

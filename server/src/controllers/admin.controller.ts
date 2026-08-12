@@ -18,6 +18,7 @@ import {
 } from '../services/dynamicTable.service';
 import { calculateTenancyDuration } from '../services/rent.service';
 import { identityNumberError } from '../utils/validators';
+import { describeUnit } from '../services/unit.service';
 import { emitToUser } from '../sockets';
 
 const tenantSelect = {
@@ -37,7 +38,7 @@ const tenantSelect = {
   policeStation: true,
   division: true,
   createdAt: true,
-  tenancy: { include: { flat: true } },
+  tenancy: { include: { flat: true, shop: true } },
 } satisfies Prisma.UserSelect;
 
 /** Text columns a user search sweeps, plus the columns it may sort on. */
@@ -85,7 +86,7 @@ export const listUsers = asyncHandler(async (req: Request, res: Response) => {
   const where: Prisma.UserWhereInput = {
     // Admins are only listed when explicitly asked for, so the default view
     // stays the tenant roster the approval queue is built around.
-    ...(role ? { role } : { role: Role.TENANT }),
+    ...(role ? { role } : { role: Role.USER }),
     ...(status === 'pending' ? { isApproved: false } : {}),
     ...(status === 'approved' ? { isApproved: true } : {}),
     ...(search
@@ -186,7 +187,7 @@ export const updateUser = asyncHandler(async (req: Request, res: Response) => {
   }
 
   // Demoting the last admin would lock everyone out of the admin console.
-  if (existing.role === Role.ADMIN && patch.role === Role.TENANT) {
+  if (existing.role === Role.ADMIN && patch.role === Role.USER) {
     const admins = await prisma.user.count({ where: { role: Role.ADMIN } });
     if (admins <= 1) throw ApiError.badRequest('The last remaining admin cannot be demoted');
   }
@@ -254,8 +255,12 @@ export const deleteUser = asyncHandler(async (req: Request, res: Response) => {
 
   await prisma.$transaction(async (tx) => {
     const tenancy = await tx.tenancy.findUnique({ where: { userId: user.id } });
-    if (tenancy) {
+    // Release whichever unit they held — a tenancy points at a flat or a shop.
+    if (tenancy?.flatId) {
       await tx.flat.update({ where: { id: tenancy.flatId }, data: { isOccupied: false } });
+    }
+    if (tenancy?.shopId) {
+      await tx.shop.update({ where: { id: tenancy.shopId }, data: { isOccupied: false } });
     }
     await tx.user.delete({ where: { id: user.id } });
   });
@@ -333,7 +338,7 @@ export const assignFlat = asyncHandler(async (req: Request, res: Response) => {
     const [user, flat, existingForUser, occupied] = await Promise.all([
       tx.user.findUnique({ where: { id: userId } }),
       tx.flat.findUnique({ where: { id: flatId } }),
-      tx.tenancy.findUnique({ where: { userId }, include: { flat: true } }),
+      tx.tenancy.findUnique({ where: { userId }, include: { flat: true, shop: true } }),
       tx.tenancy.findFirst({
         where: { flatId, isActive: true },
         include: { user: { select: { fullName: true } } },
@@ -349,9 +354,8 @@ export const assignFlat = asyncHandler(async (req: Request, res: Response) => {
       );
     }
     if (existingForUser?.isActive) {
-      throw ApiError.conflict(
-        `${user.fullName} is already assigned to flat ${existingForUser.flat.flatNumber}`
-      );
+      const held = describeUnit(existingForUser);
+      throw ApiError.conflict(`${user.fullName} is already assigned to ${held.label}`);
     }
 
     // A previous, ended tenancy occupies the unique userId slot — reuse it.
@@ -360,6 +364,7 @@ export const assignFlat = asyncHandler(async (req: Request, res: Response) => {
           where: { id: existingForUser.id },
           data: {
             flatId,
+            shopId: null,
             startDate: startDate ?? new Date(),
             endDate: null,
             advanceDeposit,
@@ -438,15 +443,164 @@ export const updateTenancy = asyncHandler(async (req: Request, res: Response) =>
   const tenancy = await prisma.tenancy.update({
     where: { id: req.params.id },
     data: req.body,
-    include: { flat: true },
+    include: { flat: true, shop: true },
   });
 
-  // Ending a tenancy frees the flat.
+  // Ending a tenancy frees whichever unit it was on.
   if (req.body.isActive === false) {
-    await prisma.flat.update({ where: { id: tenancy.flatId }, data: { isOccupied: false } });
+    if (tenancy.flatId) {
+      await prisma.flat.update({ where: { id: tenancy.flatId }, data: { isOccupied: false } });
+    }
+    if (tenancy.shopId) {
+      await prisma.shop.update({ where: { id: tenancy.shopId }, data: { isOccupied: false } });
+    }
   }
 
   res.json({ success: true, data: tenancy });
+});
+
+// --- Shops -----------------------------------------------------------------
+
+const shopWithTenant = {
+  tenancies: {
+    where: { isActive: true },
+    include: { user: { select: { id: true, fullName: true, phone: true } } },
+  },
+} satisfies Prisma.ShopInclude;
+
+export const listShops = asyncHandler(async (req: Request, res: Response) => {
+  const search = ((req.query as Record<string, unknown>).search as string | undefined)?.trim();
+
+  const shops = await prisma.shop.findMany({
+    where: search
+      ? {
+          OR: [
+            { shopName: { contains: search, mode: 'insensitive' } },
+            { shopNumber: { contains: search, mode: 'insensitive' } },
+            { address: { contains: search, mode: 'insensitive' } },
+            {
+              tenancies: {
+                some: { isActive: true, user: { fullName: { contains: search, mode: 'insensitive' } } },
+              },
+            },
+          ],
+        }
+      : undefined,
+    include: shopWithTenant,
+    orderBy: [{ shopNumber: 'asc' }],
+  });
+  res.json({ success: true, data: shops });
+});
+
+export const createShop = asyncHandler(async (req: Request, res: Response) => {
+  const shop = await prisma.shop.create({ data: req.body, include: shopWithTenant });
+  res.status(201).json({ success: true, data: shop });
+});
+
+export const updateShop = asyncHandler(async (req: Request, res: Response) => {
+  const existing = await prisma.shop.findUnique({
+    where: { id: req.params.id },
+    include: { tenancies: { where: { isActive: true } } },
+  });
+  if (!existing) throw ApiError.notFound('Shop not found');
+
+  // Occupancy is derived from the tenancy ledger, exactly as for flats.
+  const { isOccupied, ...data } = req.body;
+  if (isOccupied === false && existing.tenancies.length > 0) {
+    throw ApiError.conflict('End the active tenancy before marking this shop vacant');
+  }
+
+  const shop = await prisma.shop.update({
+    where: { id: existing.id },
+    data,
+    include: shopWithTenant,
+  });
+  res.json({ success: true, data: shop });
+});
+
+export const deleteShop = asyncHandler(async (req: Request, res: Response) => {
+  const active = await prisma.tenancy.count({ where: { shopId: req.params.id, isActive: true } });
+  if (active > 0) throw ApiError.conflict('End the active tenancy before deleting this shop');
+  await prisma.shop.delete({ where: { id: req.params.id } });
+  res.json({ success: true, data: { deleted: req.params.id } });
+});
+
+/**
+ * Assigns a user to a shop. Same invariant as flats, and it spans both tables:
+ * a user holds one unit total, so somebody already in a flat cannot take a shop.
+ */
+export const assignShop = asyncHandler(async (req: Request, res: Response) => {
+  const { userId, advanceDeposit, startDate } = req.body;
+  const shopId = req.params.id;
+
+  const tenancy = await prisma.$transaction(async (tx) => {
+    const [user, shop, existingForUser, occupied] = await Promise.all([
+      tx.user.findUnique({ where: { id: userId } }),
+      tx.shop.findUnique({ where: { id: shopId } }),
+      tx.tenancy.findUnique({ where: { userId }, include: { flat: true, shop: true } }),
+      tx.tenancy.findFirst({
+        where: { shopId, isActive: true },
+        include: { user: { select: { fullName: true } } },
+      }),
+    ]);
+
+    if (!user) throw ApiError.notFound('User not found');
+    if (!shop) throw ApiError.notFound('Shop not found');
+    if (user.role === Role.ADMIN) throw ApiError.badRequest('Admin accounts cannot rent a unit');
+    if (occupied) {
+      throw ApiError.conflict(
+        `Shop ${shop.shopNumber} is already assigned to ${occupied.user.fullName}`
+      );
+    }
+    if (existingForUser?.isActive) {
+      const held = describeUnit(existingForUser);
+      throw ApiError.conflict(`${user.fullName} is already assigned to ${held.label}`);
+    }
+
+    // A previous, ended tenancy occupies the unique userId slot — reuse it,
+    // clearing the flat side so exactly one unit stays set.
+    const created = existingForUser
+      ? await tx.tenancy.update({
+          where: { id: existingForUser.id },
+          data: {
+            flatId: null,
+            shopId,
+            startDate: startDate ?? new Date(),
+            endDate: null,
+            advanceDeposit,
+            isActive: true,
+          },
+          include: { shop: true, user: { select: { id: true, fullName: true, phone: true } } },
+        })
+      : await tx.tenancy.create({
+          data: { userId, shopId, startDate: startDate ?? new Date(), advanceDeposit },
+          include: { shop: true, user: { select: { id: true, fullName: true, phone: true } } },
+        });
+
+    await tx.shop.update({ where: { id: shopId }, data: { isOccupied: true } });
+    return created;
+  });
+
+  res.status(201).json({ success: true, data: tenancy });
+});
+
+/** Ends the shop's active tenancy and releases the unit. */
+export const releaseShop = asyncHandler(async (req: Request, res: Response) => {
+  const shopId = req.params.id;
+
+  const released = await prisma.$transaction(async (tx) => {
+    const tenancy = await tx.tenancy.findFirst({ where: { shopId, isActive: true } });
+    if (!tenancy) throw ApiError.badRequest('This shop has no active tenancy');
+
+    const ended = await tx.tenancy.update({
+      where: { id: tenancy.id },
+      data: { isActive: false, endDate: new Date() },
+    });
+    await tx.shop.update({ where: { id: shopId }, data: { isOccupied: false } });
+    return ended;
+  });
+
+  res.json({ success: true, data: released });
 });
 
 // --- Expenses --------------------------------------------------------------

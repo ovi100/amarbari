@@ -2,7 +2,15 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app';
 import { databaseAvailable, prisma, resetDatabase } from './helpers/db';
-import { bearer, createAdmin, createFlat, createTenancy, createUser } from './helpers/factory';
+import {
+  bearer,
+  createAdmin,
+  createFlat,
+  createShop,
+  createShopTenancy,
+  createTenancy,
+  createUser,
+} from './helpers/factory';
 
 const app = createApp();
 let dbUp = false;
@@ -393,7 +401,7 @@ describe('user approval centre (SRS 3.2.2)', () => {
     await request(app)
       .patch(`/api/v1/admin/users/${other.id}`)
       .set('Authorization', bearer(admin))
-      .send({ role: 'TENANT' })
+      .send({ role: 'USER' })
       .expect(200);
 
     // Now `admin` is the only one left — and cannot remove themselves either.
@@ -726,5 +734,149 @@ describe('maintenance tickets (SRS 3.1.5 / 3.2.5)', () => {
       .field('category', 'OTHER')
       .field('description', 'I do not actually live here yet, so this should fail.')
       .expect(400);
+  });
+});
+
+describe('shops — the commercial rent category', () => {
+  it('creates, edits and deletes a shop', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+    const stamp = Date.now() % 100_000;
+
+    const created = await request(app)
+      .post('/api/v1/admin/shops')
+      .set('Authorization', bearer(admin))
+      .send({
+        shopName: 'Rahim General Store',
+        shopNumber: `S-${stamp}`,
+        address: '12 Mirpur Road, Dhaka',
+        baseRent: 32000,
+      })
+      .expect(201);
+
+    const id = created.body.data.id as string;
+    expect(created.body.data.shopName).toBe('Rahim General Store');
+    expect(created.body.data.isOccupied).toBe(false);
+
+    const edited = await request(app)
+      .patch(`/api/v1/admin/shops/${id}`)
+      .set('Authorization', bearer(admin))
+      .send({ baseRent: 35000, address: '14 Mirpur Road, Dhaka' })
+      .expect(200);
+    expect(edited.body.data.baseRent).toBe(35000);
+
+    await request(app)
+      .delete(`/api/v1/admin/shops/${id}`)
+      .set('Authorization', bearer(admin))
+      .expect(200);
+    expect(await prisma.shop.findUnique({ where: { id } })).toBeNull();
+  });
+
+  it('rejects a duplicate shop number and an invalid payload', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+    const existing = await createShop();
+
+    await request(app)
+      .post('/api/v1/admin/shops')
+      .set('Authorization', bearer(admin))
+      .send({
+        shopName: 'Copycat',
+        shopNumber: existing.shopNumber,
+        address: '1 Somewhere Road, Dhaka',
+        baseRent: 1000,
+      })
+      .expect(500); // unique violation surfaces from the database
+
+    await request(app)
+      .post('/api/v1/admin/shops')
+      .set('Authorization', bearer(admin))
+      .send({ shopName: 'X', shopNumber: '', address: 'sh', baseRent: 0 })
+      .expect(400);
+  });
+
+  it('assigns a user to a shop and enforces one unit per user across categories', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+    const first = await createUser();
+    const second = await createUser();
+    const shop = await createShop(30000);
+    const otherShop = await createShop(28000);
+    const flat = await createFlat(20000);
+
+    await request(app)
+      .post(`/api/v1/admin/shops/${shop.id}/tenancy`)
+      .set('Authorization', bearer(admin))
+      .send({ userId: first.id, advanceDeposit: 60000 })
+      .expect(201);
+
+    expect((await prisma.shop.findUnique({ where: { id: shop.id } }))!.isOccupied).toBe(true);
+
+    // A second user cannot take an occupied shop…
+    await request(app)
+      .post(`/api/v1/admin/shops/${shop.id}/tenancy`)
+      .set('Authorization', bearer(admin))
+      .send({ userId: second.id })
+      .expect(409);
+
+    // …the shopkeeper cannot take a second shop…
+    await request(app)
+      .post(`/api/v1/admin/shops/${otherShop.id}/tenancy`)
+      .set('Authorization', bearer(admin))
+      .send({ userId: first.id })
+      .expect(409);
+
+    // …and the invariant spans categories: no flat either.
+    const crossCategory = await request(app)
+      .post(`/api/v1/admin/flats/${flat.id}/tenancy`)
+      .set('Authorization', bearer(admin))
+      .send({ userId: first.id })
+      .expect(409);
+    expect(crossCategory.body.error.message).toMatch(/already assigned to/i);
+  });
+
+  it('moves a user from a shop to a flat once released, leaving one unit set', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+    const user = await createUser();
+    const shop = await createShop();
+    const flat = await createFlat();
+
+    await request(app)
+      .post(`/api/v1/admin/shops/${shop.id}/tenancy`)
+      .set('Authorization', bearer(admin))
+      .send({ userId: user.id })
+      .expect(201);
+
+    await request(app)
+      .delete(`/api/v1/admin/shops/${shop.id}/tenancy`)
+      .set('Authorization', bearer(admin))
+      .expect(200);
+
+    await request(app)
+      .post(`/api/v1/admin/flats/${flat.id}/tenancy`)
+      .set('Authorization', bearer(admin))
+      .send({ userId: user.id })
+      .expect(201);
+
+    // Reusing the row must clear the shop side, or the CHECK constraint trips.
+    const tenancy = await prisma.tenancy.findUnique({ where: { userId: user.id } });
+    expect(tenancy!.flatId).toBe(flat.id);
+    expect(tenancy!.shopId).toBeNull();
+    expect((await prisma.shop.findUnique({ where: { id: shop.id } }))!.isOccupied).toBe(false);
+  });
+
+  it('refuses to mark an occupied shop vacant by hand', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+    const user = await createUser();
+    const shop = await createShop();
+    await createShopTenancy(user.id, shop.id);
+
+    await request(app)
+      .patch(`/api/v1/admin/shops/${shop.id}`)
+      .set('Authorization', bearer(admin))
+      .send({ isOccupied: false })
+      .expect(409);
   });
 });

@@ -21,11 +21,18 @@ async function assertInvoiceAccess(req: Request, invoiceId: string) {
   const tenancy = await prisma.tenancy.findUnique({ where: { userId: req.user!.id } });
   const invoice = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    select: { flatId: true },
+    select: { flatId: true, shopId: true },
   });
   if (!invoice) throw ApiError.notFound('Invoice not found');
-  if (!tenancy || tenancy.flatId !== invoice.flatId) {
-    throw ApiError.forbidden('This invoice belongs to another flat');
+
+  // Match on whichever FK the tenancy uses; a null-to-null comparison would
+  // otherwise let a shop tenant read every flat invoice.
+  const sameUnit =
+    tenancy &&
+    ((tenancy.flatId && tenancy.flatId === invoice.flatId) ||
+      (tenancy.shopId && tenancy.shopId === invoice.shopId));
+  if (!sameUnit) {
+    throw ApiError.forbidden('This invoice belongs to another unit');
   }
 }
 
@@ -36,6 +43,15 @@ export const getInvoice = asyncHandler(async (req: Request, res: Response) => {
     where: { id: req.params.id },
     include: {
       flat: {
+        include: {
+          tenancies: {
+            where: { isActive: true },
+            take: 1,
+            include: { user: { select: { id: true, fullName: true, phone: true } } },
+          },
+        },
+      },
+      shop: {
         include: {
           tenancies: {
             where: { isActive: true },
@@ -113,6 +129,16 @@ export const listInvoices = asyncHandler(async (req: Request, res: Response) => 
               },
             },
           },
+          { shop: { shopNumber: { contains: search, mode: 'insensitive' } } },
+          { shop: { shopName: { contains: search, mode: 'insensitive' } } },
+          { shop: { address: { contains: search, mode: 'insensitive' } } },
+          {
+            shop: {
+              tenancies: {
+                some: { isActive: true, user: { fullName: { contains: search, mode: 'insensitive' } } },
+              },
+            },
+          },
         ],
       }
     : {};
@@ -126,6 +152,18 @@ export const listInvoices = asyncHandler(async (req: Request, res: Response) => 
           select: {
             flatNumber: true,
             building: true,
+            tenancies: {
+              where: { isActive: true },
+              take: 1,
+              select: { user: { select: { id: true, fullName: true } } },
+            },
+          },
+        },
+        shop: {
+          select: {
+            shopNumber: true,
+            shopName: true,
+            address: true,
             tenancies: {
               where: { isActive: true },
               take: 1,

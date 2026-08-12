@@ -13,7 +13,7 @@ export async function createUser(overrides: Partial<Parameters<typeof prisma.use
       fullName: `Test Tenant ${n}`,
       phone: `+88017${String(10_000_000 + n).slice(0, 8)}`,
       passwordHash: await bcrypt.hash('Passw0rd!23', 4),
-      role: Role.TENANT,
+      role: Role.USER,
       isPhoneVerified: true,
       isApproved: true,
       familyMembers: 2,
@@ -41,9 +41,33 @@ export async function createFlat(baseRent = 20000) {
   });
 }
 
+export async function createShop(baseRent = 30000) {
+  const n = nextId();
+  return prisma.shop.create({
+    data: {
+      shopNumber: `S-${n}-${Date.now() % 10_000}`,
+      shopName: `Test Shop ${n}`,
+      address: `${n} Test Road, Dhaka`,
+      baseRent,
+    },
+  });
+}
+
 export async function createTenancy(userId: string, flatId: string, advanceDeposit = 0, startDate?: Date) {
   return prisma.tenancy.create({
     data: { userId, flatId, advanceDeposit, ...(startDate ? { startDate } : {}) },
+  });
+}
+
+/** A tenancy on the commercial side of the portfolio. */
+export async function createShopTenancy(
+  userId: string,
+  shopId: string,
+  advanceDeposit = 0,
+  startDate?: Date
+) {
+  return prisma.tenancy.create({
+    data: { userId, shopId, advanceDeposit, ...(startDate ? { startDate } : {}) },
   });
 }
 

@@ -1,5 +1,6 @@
 import prisma from '../utils/prisma';
 import { calculateTenancyDuration, outstandingOf } from './rent.service';
+import { describeUnit, unitRef, unitRefOf } from './unit.service';
 import { env } from '../config/env';
 
 export interface BotReply {
@@ -62,7 +63,7 @@ export async function getBotReply(userId: string, rawMessage: string): Promise<B
   if (matches('rent', 'bill', 'invoice')) {
     const tenancy = await prisma.tenancy.findUnique({
       where: { userId },
-      include: { flat: true },
+      include: { flat: true, shop: true },
     });
     if (!tenancy) {
       return {
@@ -72,20 +73,22 @@ export async function getBotReply(userId: string, rawMessage: string): Promise<B
     }
 
     const now = new Date();
-    const invoice = await prisma.invoice.findUnique({
+    const unit = describeUnit(tenancy);
+    const { category, id: unitId } = unitRefOf(tenancy);
+    const baseRent = (tenancy.flat ?? tenancy.shop)!.baseRent;
+
+    const invoice = await prisma.invoice.findFirst({
       where: {
-        flatId_month_year: {
-          flatId: tenancy.flatId,
-          month: now.getMonth() + 1,
-          year: now.getFullYear(),
-        },
+        ...unitRef(category, unitId),
+        month: now.getMonth() + 1,
+        year: now.getFullYear(),
       },
     });
 
     if (!invoice) {
       return {
         message:
-          `Flat ${tenancy.flat.flatNumber} — base rent ${currency} ${tenancy.flat.baseRent.toFixed(2)}.\n` +
+          `${unit.label} — base rent ${currency} ${baseRent.toFixed(2)}.\n` +
           `This month's invoice has not been issued yet. You have been here ` +
           `${calculateTenancyDuration(tenancy.startDate).label}.`,
         escalate: false,
@@ -94,7 +97,7 @@ export async function getBotReply(userId: string, rawMessage: string): Promise<B
 
     return {
       message: [
-        `Rent breakdown for ${String(invoice.month).padStart(2, '0')}/${invoice.year} — Flat ${tenancy.flat.flatNumber}:`,
+        `Rent breakdown for ${String(invoice.month).padStart(2, '0')}/${invoice.year} — ${unit.label}:`,
         `  Flat rent:      ${currency} ${invoice.flatRent.toFixed(2)}`,
         `  Electricity:    ${currency} ${invoice.electricityBill.toFixed(2)}`,
         `  Water:          ${currency} ${invoice.waterBill.toFixed(2)}`,

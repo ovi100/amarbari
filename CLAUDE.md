@@ -8,9 +8,9 @@
 
 **AmarBari** is a modern, decoupled full-stack property and rent management SaaS platform tailored for landlords (Admins) and residents (Users). The system features a decoupled architecture with a standalone SPA frontend powered by React 19, Vite, and TypeScript, communicating over REST APIs and WebSockets with a Node.js/Express backend.
 
-> **Terminology:** the product surface calls every account a **User**. The domain model still uses
-> _tenancy_ for the relationship between a user and a flat, and the `Role` enum still has a `TENANT`
-> member. "Tenant" in this document means the role, not the UI label.
+> **Terminology:** every account is a **User** — the `Role` enum is `ADMIN | USER`. The domain model
+> still calls the user↔unit relationship a **tenancy**, and a *unit* is either a **flat** or a **shop**
+> (§8.9). "Tenant" in older parts of this document means the role that is now `USER`.
 
 ---
 
@@ -48,6 +48,7 @@ rather than re-implementing grids and filters per page.
 | `PasswordInput` in `ui/form-controls.tsx`    | Password field with a reveal toggle. Every password input in the app uses it (§3.1.7).                           |
 | `lib/identity.ts`                            | Identity-document rules — pattern, message, placeholder, keyboard and length cap per type (§8.6).                 |
 | `lib/schemas.ts`                             | Every Zod form schema. Mirrors `server/src/utils/validators.ts`; the two must change together.                    |
+| `lib/unit.ts`                                | Resolves a tenancy's flat *or* shop into one display shape. Client mirror of `services/unit.service.ts` (§8.9).   |
 
 #### 2.1.2 Theming Requirement
 
@@ -94,7 +95,7 @@ the light palette on a dark surface, where they read as missing rather than mere
      validated **against each other** — the accepted number format depends on the document type
      (NID 10/13/17 digits, passport 9 characters, birth certificate 17 digits). Phone numbers are
      11 digits. Every rule, and where each is enforced, is tabulated in **§8.6**.
-2. **OTP Verification — currently switched OFF, see §8.9:**
+2. **OTP Verification — currently switched OFF, see §8.10:**
    - OTP delivery over **WhatsApp**, **IMO**, or **SMS via Twilio** — the user picks the channel on the
      verification screen and can re-send over a different one.
    - 6-digit dynamic passcode with 3-minute Redis expiration and rate limiting.
@@ -134,14 +135,18 @@ the light palette on a dark surface, where they read as missing rather than mere
    - Review pending registrations, verify ID documents, approve/revoke access.
    - **Full user CRUD:** create, edit and delete accounts directly from the admin console. Accounts
      created here bypass self-registration and may be pre-approved and pre-verified, and their role
-     (`ADMIN` / `TENANT`) is set on the form.
+     (`ADMIN` / `USER`) is set on the form.
    - Guards, enforced server-side: phone number and identity number are unique across accounts; an
      admin cannot delete their own account; and the **last remaining admin can be neither demoted nor
      deleted** — either would lock everyone out of the console.
    - Flat allocation and tenancy histories, subject to the assignment invariant in §8.3.
-3. **Flat Management:**
-   - Create, **edit** and delete units.
-   - Assign or release a user from the flat's own row.
+3. **Flat & Shop Management:**
+   - Two rent categories: **flats** (residential) and **shops** (commercial), each with its own admin
+     page and its own identifying fields — a shop has a trading name, a shop number and a street
+     address. Full model and its constraints in §8.9.
+   - Create, **edit** and delete units in either category.
+   - Assign or release a user from the unit's own row. **One unit per user portfolio-wide**: somebody
+     renting a flat cannot also take a shop.
    - `isOccupied` is derived from the tenancy ledger and is **not** hand-editable to `false` while a
      tenancy is active — a flat reading "vacant" with somebody still allocated to it corrupts both
      occupancy analytics and the invoice guard in §8.2.
@@ -228,6 +233,9 @@ the original draft of this section and are deliberate:
   are what make the invariants in §8.2 and §8.3 enforceable rather than merely intended.
 - Cascade deletes on `Tenancy`, `MaintenanceTicket` and `ChatMessage` let a user be deleted in one
   transaction.
+- **`Shop` sits alongside `Flat`**, and everything that hangs off a unit carries a nullable FK to each
+  with exactly one set, guarded by CHECK constraints the ORM cannot express. See §8.9 before changing
+  any of it.
 
 ```prisma
 datasource db {
@@ -242,7 +250,13 @@ generator client {
 
 enum Role {
   ADMIN
-  TENANT
+  USER
+}
+
+/// Which table a rentable unit lives in (§8.9).
+enum RentCategory {
+  FLAT
+  SHOP
 }
 
 enum IdentityType {
@@ -286,7 +300,7 @@ model User {
   fullName        String
   phone           String         @unique
   passwordHash    String
-  role            Role           @default(TENANT)
+  role            Role           @default(USER)
   isPhoneVerified Boolean        @default(false)
   isApproved      Boolean        @default(false)
 
@@ -337,13 +351,17 @@ model Flat {
 
 /// `userId` is unique: a user holds at most one tenancy record, which is half of
 /// the assignment invariant in §8.3. The other half — one *active* tenancy per
-/// flat — cannot be expressed as a constraint and is enforced in the transaction.
+/// unit — cannot be expressed as a constraint and is enforced in the transaction.
+///
+/// Exactly one of `flatId` / `shopId` is set — `tenancy_one_unit` CHECK (§8.9).
 model Tenancy {
   id             String    @id @default(uuid())
   userId         String    @unique
-  flatId         String
+  flatId         String?
+  shopId         String?
   user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  flat           Flat      @relation(fields: [flatId], references: [id])
+  flat           Flat?     @relation(fields: [flatId], references: [id])
+  shop           Shop?     @relation(fields: [shopId], references: [id])
 
   startDate      DateTime  @default(now())
   endDate        DateTime?
@@ -355,19 +373,29 @@ model Tenancy {
   updatedAt      DateTime  @updatedAt
 }
 
+/// Exactly one of `flatId` / `shopId` is set — `invoice_one_unit` CHECK. The two
+/// unique indexes below coexist because Postgres treats NULLs as distinct (§8.9).
 model Invoice {
   id              String        @id @default(uuid())
-  flatId          String
-  flat            Flat          @relation(fields: [flatId], references: [id])
+  flatId          String?
+  shopId          String?
+  flat            Flat?         @relation(fields: [flatId], references: [id])
+  shop            Shop?         @relation(fields: [shopId], references: [id])
   month           Int           // 1 - 12
   year            Int
 
-  // Bill Breakdown
+  // Bill Breakdown. Which lines apply depends on the unit category —
+  // see LINE_ITEMS in services/unit.service.ts (§8.9).
   flatRent        Float
   electricityBill Float        @default(0.0)
   waterBill       Float        @default(0.0)
   internetBill    Float        @default(0.0)
   utilityBill     Float        @default(0.0)
+
+  // Shop-only lines; always 0 on a flat invoice.
+  serviceCharge     Float      @default(0.0)
+  maintenanceCharge Float      @default(0.0)
+
   previousDue     Float        @default(0.0)
   totalAmount     Float
 
@@ -380,15 +408,41 @@ model Invoice {
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
-  /// One invoice per flat per billing month.
+  /// One invoice per unit per billing month, per category.
   @@unique([flatId, month, year])
+  @@unique([shopId, month, year])
   @@index([year, month])
 }
 
+/// A commercial unit — the second rent category, parallel to Flat rather than a
+/// variant of it, so it carries its own identifying fields (§8.9).
+model Shop {
+  id          String   @id @default(uuid())
+  shopName    String
+  shopNumber  String   @unique
+  address     String
+  isOccupied  Boolean  @default(false)
+  baseRent    Float
+
+  tenancies   Tenancy[]
+  invoices    Invoice[]
+  tickets     MaintenanceTicket[]
+  expenses    BuildingExpense[]
+
+  customFields Json    @default("{}")
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+/// Building-wide when both FKs are null; otherwise attributed to one unit.
+/// `expense_at_most_one_unit` CHECK rejects pointing at both.
 model BuildingExpense {
   id          String   @id @default(uuid())
   flatId      String?
+  shopId      String?
   flat        Flat?    @relation(fields: [flatId], references: [id])
+  shop        Shop?    @relation(fields: [shopId], references: [id])
   category    String   // e.g. "Electricity", "Water Maintenance", "Internet Trunk"
   amount      Float
   description String?
@@ -397,12 +451,15 @@ model BuildingExpense {
   createdAt   DateTime @default(now())
 }
 
+/// Exactly one of `flatId` / `shopId` is set — `ticket_one_unit` CHECK.
 model MaintenanceTicket {
   id          String        @id @default(uuid())
   userId      String
-  flatId      String
-  user        User          @relation(fields: [userId], references: [id])
-  flat        Flat          @relation(fields: [flatId], references: [id])
+  flatId      String?
+  shopId      String?
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  flat        Flat?         @relation(fields: [flatId], references: [id])
+  shop        Shop?         @relation(fields: [shopId], references: [id])
   category    IssueCategory
   description String
   imageUrl    String?
@@ -467,7 +524,7 @@ Mounted at **both** `/api/v1/admin/users` and `/api/v1/admin/tenants`. `/users` 
 array under both a `users` and a `tenants` key.
 
 - `GET /api/v1/admin/users` — List users; supports the shared query contract plus `status=pending|approved`
-  and `role=ADMIN|TENANT`. Defaults to the `TENANT` roster.
+  and `role=ADMIN|USER`. Defaults to the `USER` roster.
 - `POST /api/v1/admin/users` — Create an account, optionally pre-approved and pre-verified.
 - `GET /api/v1/admin/users/:id` — Full record including recent tickets and tenancy duration.
 - `PATCH /api/v1/admin/users/:id` — Update any profile field, role, approval state, or password.
@@ -483,6 +540,18 @@ array under both a `users` and a `tenants` key.
 - `POST /api/v1/admin/flats/:id/tenancy` — Assign a user to the flat (§8.3).
 - `DELETE /api/v1/admin/flats/:id/tenancy` — End the active tenancy and release the unit.
 - `DELETE /api/v1/admin/flats/:id` — Delete the unit; refused while a tenancy is active.
+
+### 6.1.3 Shops (Admin)
+
+Mirrors the flat routes; a shop is the other rent category (§8.9).
+
+- `GET /api/v1/admin/shops` — List shops with their active tenancy; `?search=` matches shop number,
+  name, address, or the assigned user's name.
+- `POST /api/v1/admin/shops` — Create a shop (`shopName`, `shopNumber`, `address`, `baseRent`).
+- `PATCH /api/v1/admin/shops/:id` — Edit. Rejects `isOccupied: false` while a tenancy is active.
+- `POST /api/v1/admin/shops/:id/tenancy` — Assign a user. Rejects anyone already holding *any* unit.
+- `DELETE /api/v1/admin/shops/:id/tenancy` — End the tenancy and release the shop.
+- `DELETE /api/v1/admin/shops/:id` — Delete; refused while a tenancy is active.
 
 ### 6.2 Dynamic Schema & Table Management (Admin)
 
@@ -508,8 +577,9 @@ array under both a `users` and a `tenants` key.
 
 - `GET /api/v1/invoices` — Admin list; shared query contract, with `search` matching flat number,
   building or the assigned user's name.
-- `POST /api/v1/invoices` — Generate a monthly invoice. **400** if the flat has no active tenancy (§8.2);
-  **409** if one already exists for that flat and month.
+- `POST /api/v1/invoices` — Generate a monthly invoice for **exactly one** of `flatId` / `shopId`
+  (**400** if both or neither). **400** if that unit has no active tenancy (§8.2); **409** if one
+  already exists for that unit and month. Charges outside the unit's category are stored as 0 (§8.9).
 - `GET /api/v1/invoices/:id` — Invoice detail including the flat and its current occupant.
 - `PATCH /api/v1/invoices/:id` — Edit line items and due date. Recomputes `totalAmount` and re-derives
   `paymentStatus` from what has been settled (§8.5).
@@ -566,6 +636,10 @@ To guarantee end-to-end reliability, security, and smooth user experience across
      same guard exercised through the raw Data Control record editor.
    - **Validator unit tests:** the identity matrix, phone canonicalisation to `+8801XXXXXXXXX`, and the
      server password rule matching the client's.
+   - **Rent categories (§8.9):** shop CRUD; the one-unit-per-user invariant *across* both tables;
+     releasing a shop then assigning a flat leaves exactly one FK set; shop invoicing using its own
+     line items with flat-only charges forced to zero; `flatId`/`shopId` being mutually exclusive on
+     create; flat and shop invoices coexisting for the same month; and a shop tenant's rent summary.
    - **Assignment invariant (§8.3):** double-booking a flat and double-housing a user both rejected;
      release-then-reassign reusing the existing tenancy row.
    - **Invoice rules:** vacant-flat generation refused and no row written; edit recalculating total,
@@ -598,6 +672,10 @@ To guarantee end-to-end reliability, security, and smooth user experience across
 | **Identity Normalisation**          | Enter a passport number as `bm 0099-231`.                                                  | Accepted and stored as `BM0099231`.                                                                                     |
 | **Phone Length**                    | Register with a 10- or 12-digit mobile number.                                             | Rejected, naming the 11-digit rule. `+880` and `880` forms of a valid number are accepted.                              |
 | **Overpayment**                     | Record a payment larger than the invoice's outstanding balance.                            | Rejected before submission, naming the outstanding figure.                                                              |
+| **One Unit Per User**               | Assign a user who already rents a flat to a shop (or the reverse).                          | `409` naming the unit they already hold. No tenancy row is written.                                                     |
+| **Shop Line Items**                 | Generate a shop invoice, posting a water charge alongside the service charge.                | The water charge is stored as 0 and excluded from the total; the form does not offer it in the first place.             |
+| **Mixed-Category Month**            | Invoice a flat and a shop for the same month, then repeat for the shop.                      | Both succeed; the repeat is `409`. The two unique indexes do not interfere.                                             |
+| **Unit Reassignment**               | Release a shop tenant, then assign that user a flat.                                        | The tenancy row is reused with `shopId` cleared — exactly one FK set, per the CHECK constraint.                         |
 
 ### 7.3 CI/CD Automated Testing Pipeline Workflow (`.github/workflows/test.yml`)
 
@@ -783,7 +861,54 @@ findable. The UI says which stage produced the rows on screen.
 
 ---
 
-### 8.9 Phone Verification Switch
+### 8.9 Rent Categories: Flats and Shops
+
+A rentable unit is a **flat** or a **shop**. They live in **separate tables** (`Flat`, `Shop`) — the
+alternative, one `Property` table with a type discriminator, was considered and rejected.
+
+**The cost of that choice, and how it is contained.** Every record hanging off a unit — `Tenancy`,
+`Invoice`, `MaintenanceTicket`, `BuildingExpense` — carries a *nullable FK to each table* with exactly
+one set. Nothing in Prisma expresses "exactly one", so two mechanisms hold the line:
+
+1. **Database CHECK constraints** (`tenancy_one_unit`, `invoice_one_unit`, `ticket_one_unit`,
+   `expense_at_most_one_unit`), added by hand in the migration. No code path can bypass them, including
+   the raw Data Control editor. `BuildingExpense` allows *neither* — that is a building-wide cost.
+2. **`services/unit.service.ts`** — the single place the `flat ?? shop` branch lives. Documents,
+   exports, the chatbot and rent all consume a `UnitSummary` (`category`, `number`, `label`,
+   `location`) and never test which table a record came from. `client/src/lib/unit.ts` mirrors it.
+
+Two details worth knowing before touching this:
+
+- **Uniqueness.** `Invoice` has two unique indexes, `[flatId, month, year]` and `[shopId, month, year]`.
+  Postgres treats NULLs as distinct, so shop invoices (all `flatId = NULL`) never collide on the flat
+  index. A flat and a shop can both be invoiced for the same month.
+- **Reassignment.** `Tenancy.userId` is unique, so moving a user between categories *reuses the row*.
+  Whichever assign path runs must **null out the other FK**, or the row points at both and the CHECK
+  constraint rejects it. Both `assignFlat` and `assignShop` do this; a test pins it.
+
+**One unit per user, portfolio-wide.** The invariant spans both tables: somebody renting a flat cannot
+also take a shop. Enforced inside the assignment transaction, not by the schema.
+
+**Shop fields:** `shopName` (trading name), `shopNumber` (unique), `address`, `baseRent`.
+
+#### Line items per category
+
+Which charges an invoice carries depends on the unit type — `LINE_ITEMS` in `unit.service.ts`:
+
+| Category | Lines |
+| :------- | :---- |
+| `FLAT`   | Rent, electricity, water, internet, utility & service |
+| `SHOP`   | Rent, electricity, **service charge**, **maintenance charge** |
+
+Charges outside a category's list are **forced to zero on write**, not merely hidden — posting a
+`waterBill` on a shop invoice stores 0 rather than silently billing it. The admin form, the invoice
+PDF and the CSV export all read the same table.
+
+> **Assumption to revisit:** the shop line-up (service + maintenance in place of water + internet) was
+> chosen as a sensible default, not from a real shop bill. Adjust `LINE_ITEMS` when you have billed a
+> few real shops; the form, documents and exports follow automatically.
+
+### 8.10 Phone Verification Switch
 
 **Phone verification is currently off.** No SMS route to Bangladeshi numbers works yet — Twilio's US
 long codes are carrier-filtered, and the MobiReach credentials on hand target a retired query-string
@@ -828,12 +953,12 @@ amar-bari/
 │   │   │   └── ui/             # Shadcn primitives + data-table, date-range-picker,
 │   │   │                       #   dropdown-menu, segmented, form-controls
 │   │   ├── hooks/              # Custom Hooks (useSocket, useAuth)
-│   │   ├── lib/                # schemas.ts (every Zod form schema),
-│   │   │                       #   identity.ts (§8.6 document rules), utils.ts
+│   │   ├── lib/                # schemas.ts (every Zod form schema), identity.ts
+│   │   │                       #   (§8.6 document rules), unit.ts (§8.9), utils.ts
 │   │   ├── pages/
-│   │   │   ├── admin/          # AdminDashboard, UsersPage, FlatsPage, InvoicesPage,
-│   │   │   │                   #   ExpensesPage, AdminTicketsPage, AdminChatPage,
-│   │   │   │                   #   DataControlPage
+│   │   │   ├── admin/          # AdminDashboard, UsersPage, FlatsPage, ShopsPage,
+│   │   │   │                   #   InvoicesPage, ExpensesPage, AdminTicketsPage,
+│   │   │   │                   #   AdminChatPage, DataControlPage
 │   │   │   ├── auth/           # Login, Register, VerifyOtp
 │   │   │   └── tenant/         # Resident dashboard, rent, issues, chat, profile
 │   │   ├── routes/             # React Router v7 Configuration & Role Guards
@@ -854,7 +979,8 @@ amar-bari/
 │   │   ├── controllers/        # Express Route Handlers
 │   │   ├── middlewares/        # JWT Auth, Role Guard, CORS, Rate Limiter
 │   │   ├── routes/             # REST Route Definitions
-│   │   ├── services/           # OTP Generator, PDF/JPG Engine, WhatsApp API
+│   │   ├── services/           # unit.service.ts (the only flat-or-shop branch, §8.9),
+│   │   │                       #   OTP generator, PDF/JPG engine, messaging providers
 │   │   ├── sockets/            # Socket.io Real-time Handlers
 │   │   ├── utils/              # validators.ts (mirrors client/src/lib/schemas.ts
 │   │   │                       #   + identity.ts), Excel exporters, Prisma client
@@ -918,6 +1044,25 @@ the UI refused could be set through the API. They now match.
 
 Existing fixtures carried placeholder identity numbers (`NID-1990-000111`) that the new rules reject;
 seed data, test factories and E2E helpers were updated to well-formed numbers.
+
+### 2026-08-12 — Users role rename and the shop rent category
+
+`Role.TENANT` became `Role.USER`, renamed in place with `ALTER TYPE ... RENAME VALUE` so no row was
+rewritten and no data migrated.
+
+**Shops** were added as a second rent category, in their own table alongside `Flat` — the user chose
+separate tables over one `Property` table with a type discriminator, having seen the trade-off. The
+consequence is a nullable FK pair on `Tenancy`, `Invoice`, `MaintenanceTicket` and `BuildingExpense`;
+it is contained by database CHECK constraints and by `unit.service.ts`, which is the only place that
+branches on which table a unit came from. Full detail and the traps in §8.9.
+
+Shop invoices carry a service charge and a maintenance charge in place of water and internet, and
+charges outside a category's list are forced to zero on write rather than merely hidden.
+
+**Migration note:** the migration is hand-written (`20260812200000_user_role_and_shops`) because
+Prisma's own diff would drop and recreate the `Role` enum, which cannot work while a column depends on
+it. It has **not been run against a live database** — there is no Postgres in the development
+environment used here.
 
 ### 2026-08-12 — Phone verification switched off
 

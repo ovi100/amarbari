@@ -18,6 +18,7 @@ import { identityNumberError, normaliseIdentityNumber } from '../utils/validator
 export const MANAGED_TABLES = [
   'User',
   'Flat',
+  'Shop',
   'Tenancy',
   'Invoice',
   'BuildingExpense',
@@ -36,6 +37,7 @@ const IMMUTABLE_FIELDS = ['id', 'createdAt', 'updatedAt', 'customFields'];
 const delegates: Record<ManagedTable, any> = {
   User: prisma.user,
   Flat: prisma.flat,
+  Shop: prisma.shop,
   Tenancy: prisma.tenancy,
   Invoice: prisma.invoice,
   BuildingExpense: prisma.buildingExpense,

@@ -116,13 +116,28 @@ export async function getAnalytics(range: AnalyticsRange) {
     .map(([category, amount]) => ({ category, amount }))
     .sort((a, b) => b.amount - a.amount);
 
-  const [flatCount, occupiedCount, tenantCount, pendingApprovals, openTickets] = await Promise.all([
+  // Occupancy spans both rent categories — a portfolio of 6 flats and 4 shops
+  // is 10 units, and reporting only the flats would understate it.
+  const [
+    flatCount,
+    occupiedFlats,
+    shopCount,
+    occupiedShops,
+    tenantCount,
+    pendingApprovals,
+    openTickets,
+  ] = await Promise.all([
     prisma.flat.count(),
     prisma.flat.count({ where: { isOccupied: true } }),
-    prisma.user.count({ where: { role: 'TENANT' } }),
-    prisma.user.count({ where: { role: 'TENANT', isApproved: false } }),
+    prisma.shop.count(),
+    prisma.shop.count({ where: { isOccupied: true } }),
+    prisma.user.count({ where: { role: 'USER' } }),
+    prisma.user.count({ where: { role: 'USER', isApproved: false } }),
     prisma.maintenanceTicket.count({ where: { status: { in: ['PENDING', 'IN_PROGRESS'] } } }),
   ]);
+
+  const unitCount = flatCount + shopCount;
+  const occupiedUnits = occupiedFlats + occupiedShops;
 
   return {
     range,
@@ -138,10 +153,17 @@ export async function getAnalytics(range: AnalyticsRange) {
     },
     expenseByCategory,
     occupancy: {
-      flats: flatCount,
-      occupied: occupiedCount,
-      vacant: flatCount - occupiedCount,
-      rate: flatCount === 0 ? 0 : Math.round((occupiedCount / flatCount) * 100),
+      // `flats`/`occupied` are portfolio-wide totals — the key name predates
+      // shops and is kept so existing clients keep working. The per-category
+      // split sits alongside them.
+      flats: unitCount,
+      occupied: occupiedUnits,
+      vacant: unitCount - occupiedUnits,
+      rate: unitCount === 0 ? 0 : Math.round((occupiedUnits / unitCount) * 100),
+      byCategory: {
+        FLAT: { total: flatCount, occupied: occupiedFlats },
+        SHOP: { total: shopCount, occupied: occupiedShops },
+      },
     },
     counts: { tenants: tenantCount, pendingApprovals, openTickets },
     invoices,

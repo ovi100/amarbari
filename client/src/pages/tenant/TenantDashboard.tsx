@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { unitNoun, unitOf } from '@/lib/unit';
 import { Link } from 'react-router-dom';
 import {
   CalendarClock,
@@ -35,7 +36,7 @@ export default function TenantDashboard() {
       <>
         <PageHeader title={`Welcome, ${user?.fullName.split(' ')[0] ?? 'there'}`} />
         <Alert tone="warning" title="No active tenancy yet">
-          {errorMessage(rent.error)} Once an administrator assigns you a flat, your rent
+          {errorMessage(rent.error)} Once an administrator assigns you a flat or shop, your rent
           breakdown and tenancy details will appear here.
         </Alert>
       </>
@@ -43,7 +44,9 @@ export default function TenantDashboard() {
   }
 
   const summary = rent.data!;
-  const { tenancy, flat, currentInvoice, totals } = summary;
+  const { tenancy, currentInvoice, totals } = summary;
+  // The account may hold a flat or a shop; `unit` resolves whichever it is.
+  const unit = unitOf({ ...tenancy, flat: summary.flat, shop: summary.shop });
   const openTickets = (tickets.data?.tickets ?? []).filter(
     (t) => t.status === 'PENDING' || t.status === 'IN_PROGRESS'
   );
@@ -52,7 +55,7 @@ export default function TenantDashboard() {
     <>
       <PageHeader
         title={`Welcome, ${user?.fullName.split(' ')[0] ?? 'there'}`}
-        description={`Flat ${flat.flatNumber} · Floor ${flat.floor} · ${flat.building}`}
+        description={unit ? `${unit.label} · ${unit.location}` : undefined}
         actions={
           <>
             <Button asChild variant="outline">
@@ -100,7 +103,7 @@ export default function TenantDashboard() {
           tone="success"
         />
         <StatCard
-          label="Time in this flat"
+          label={`Time in this ${unit ? unitNoun(unit.category) : 'unit'}`}
           value={tenancy.duration.label}
           hint={`Since ${formatDate(tenancy.startDate)}`}
           icon={CalendarClock}
@@ -122,7 +125,7 @@ export default function TenantDashboard() {
               <>
                 <dl className="divide-y">
                   {[
-                    ['Flat rent', currentInvoice.flatRent],
+                    ['Rent', currentInvoice.flatRent],
                     ['Electricity bill', currentInvoice.electricityBill],
                     ['Water bill', currentInvoice.waterBill],
                     ['Internet bill', currentInvoice.internetBill],
@@ -215,21 +218,21 @@ export default function TenantDashboard() {
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-base">
-                <Home className="h-4 w-4" /> Your flat
+                <Home className="h-4 w-4" /> Your {unit ? unitNoun(unit.category) : 'unit'}
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-1.5 text-sm">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Flat</span>
-                <span className="font-medium">{flat.flatNumber}</span>
+                <span className="font-medium">{unit?.number ?? '—'}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Floor</span>
-                <span className="font-medium">{flat.floor}</span>
+                <span className="text-muted-foreground">Location</span>
+                <span className="font-medium">{unit?.location ?? '—'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Base rent</span>
-                <span className="font-medium tabular-nums">{formatMoney(flat.baseRent)}</span>
+                <span className="font-medium tabular-nums">{formatMoney(unit?.baseRent)}</span>
               </div>
             </CardContent>
           </Card>

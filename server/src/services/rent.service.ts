@@ -1,6 +1,15 @@
-import { Invoice, PaymentStatus, Prisma, Tenancy } from '@prisma/client';
+import { Flat, Invoice, PaymentStatus, Prisma, Shop, Tenancy } from '@prisma/client';
 import prisma from '../utils/prisma';
 import { ApiError } from '../utils/ApiError';
+import {
+  RentCategory,
+  describeUnit,
+  fromFlat,
+  fromShop,
+  lineItemsFor,
+  unitRef,
+  unitRefOf,
+} from './unit.service';
 
 export type DeferralMode = 'DEDUCT_FROM_ADVANCE' | 'ROLLOVER';
 
@@ -130,7 +139,7 @@ export function outstandingOf(invoice: Invoice): number {
 export async function getActiveTenancy(userId: string) {
   const tenancy = await prisma.tenancy.findUnique({
     where: { userId },
-    include: { flat: true },
+    include: { flat: true, shop: true },
   });
   if (!tenancy || !tenancy.isActive) {
     throw ApiError.notFound('No active tenancy found for this account');
@@ -142,8 +151,9 @@ export async function getActiveTenancy(userId: string) {
 export async function getRentSummary(userId: string) {
   const tenancy = await getActiveTenancy(userId);
 
+  const { category, id: unitId } = unitRefOf(tenancy);
   const invoices = await prisma.invoice.findMany({
-    where: { flatId: tenancy.flatId, createdAt: { gte: tenancy.startDate } },
+    where: { ...unitRef(category, unitId), createdAt: { gte: tenancy.startDate } },
     orderBy: [{ year: 'desc' }, { month: 'desc' }],
   });
 
@@ -175,7 +185,11 @@ export async function getRentSummary(userId: string) {
       isActive: tenancy.isActive,
       duration: calculateTenancyDuration(tenancy.startDate),
     },
+    // `unit` is the type-agnostic shape; `flat` stays for existing clients and
+    // is null when the tenancy is on a shop.
+    unit: describeUnit(tenancy),
     flat: tenancy.flat,
+    shop: tenancy.shop,
     currentInvoice: currentInvoice
       ? { ...currentInvoice, outstanding: outstandingOf(currentInvoice) }
       : null,
@@ -210,21 +224,23 @@ export async function requestDue({ userId, mode, invoiceId }: RequestDueParams) 
     }
 
     const now = new Date();
+    const { category, id: unitId } = unitRefOf(tenancy);
+
     const invoice = invoiceId
       ? await tx.invoice.findUnique({ where: { id: invoiceId } })
-      : await tx.invoice.findUnique({
+      : await tx.invoice.findFirst({
           where: {
-            flatId_month_year: {
-              flatId: tenancy.flatId,
-              month: now.getMonth() + 1,
-              year: now.getFullYear(),
-            },
+            ...unitRef(category, unitId),
+            month: now.getMonth() + 1,
+            year: now.getFullYear(),
           },
         });
 
     if (!invoice) throw ApiError.notFound('No invoice found for the current billing cycle');
-    if (invoice.flatId !== tenancy.flatId) {
-      throw ApiError.forbidden('This invoice belongs to another flat');
+    // Compare on the FK that this tenancy actually uses.
+    const invoiceUnitId = category === 'FLAT' ? invoice.flatId : invoice.shopId;
+    if (invoiceUnitId !== unitId) {
+      throw ApiError.forbidden('This invoice belongs to another unit');
     }
     if (invoice.paymentStatus === PaymentStatus.PAID) {
       throw ApiError.badRequest('This invoice is already fully paid');
@@ -262,13 +278,19 @@ export async function requestDue({ userId, mode, invoiceId }: RequestDueParams) 
 }
 
 export interface GenerateInvoiceInput {
-  flatId: string;
+  /** Which table the unit lives in. Defaults to FLAT for older callers. */
+  category?: RentCategory;
+  /** The flat's id, or — when `category` is SHOP — the shop's. */
+  flatId?: string;
+  shopId?: string;
   month: number;
   year: number;
   electricityBill?: number;
   waterBill?: number;
   internetBill?: number;
   utilityBill?: number;
+  serviceCharge?: number;
+  maintenanceCharge?: number;
   flatRent?: number;
   dueDate?: Date;
 }
@@ -279,46 +301,76 @@ export interface GenerateInvoiceInput {
  * (SRS 8.1 step 3).
  */
 export async function generateInvoice(input: GenerateInvoiceInput) {
+  const category: RentCategory = input.category ?? (input.shopId ? 'SHOP' : 'FLAT');
+  const unitId = category === 'FLAT' ? input.flatId : input.shopId;
+  if (!unitId) throw ApiError.badRequest('Choose a flat or a shop to invoice');
+
   return prisma.$transaction(async (tx) => {
-    const flat = await tx.flat.findUnique({
-      where: { id: input.flatId },
-      include: { tenancies: { where: { isActive: true } } },
-    });
-    if (!flat) throw ApiError.notFound('Flat not found');
+    // Flats and shops are separate tables, so the lookup and the uniqueness
+    // check both branch. Everything after that is one code path.
+    const unit =
+      category === 'FLAT'
+        ? await tx.flat.findUnique({
+            where: { id: unitId },
+            include: { tenancies: { where: { isActive: true } } },
+          })
+        : await tx.shop.findUnique({
+            where: { id: unitId },
+            include: { tenancies: { where: { isActive: true } } },
+          });
+
+    if (!unit) throw ApiError.notFound(category === 'FLAT' ? 'Flat not found' : 'Shop not found');
+
+    const described = category === 'FLAT' ? fromFlat(unit as Flat) : fromShop(unit as Shop);
 
     // A bill needs somebody to bill. Invoicing a vacant unit produces a
     // receivable nobody owes and skews every revenue figure downstream.
-    if (flat.tenancies.length === 0) {
+    if (unit.tenancies.length === 0) {
       throw ApiError.badRequest(
-        `Flat ${flat.flatNumber} has no user assigned — allocate a tenant before invoicing it`
+        `${described.label} has no user assigned — allocate a tenant before invoicing it`
       );
     }
 
-    const existing = await tx.invoice.findUnique({
-      where: { flatId_month_year: { flatId: input.flatId, month: input.month, year: input.year } },
+    const existing = await tx.invoice.findFirst({
+      where: { ...unitRef(category, unitId), month: input.month, year: input.year },
     });
     if (existing) {
       throw ApiError.conflict(
-        `An invoice for flat ${flat.flatNumber} already exists for ${input.month}/${input.year}`
+        `An invoice for ${described.label} already exists for ${input.month}/${input.year}`
       );
     }
 
-    const tenancy: Tenancy | undefined = flat.tenancies[0];
+    const tenancy: Tenancy | undefined = unit.tenancies[0];
     const previousDue = money(tenancy?.accumulatedDue ?? 0);
 
-    const flatRent = money(input.flatRent ?? flat.baseRent);
-    const electricityBill = money(input.electricityBill ?? 0);
-    const waterBill = money(input.waterBill ?? 0);
-    const internetBill = money(input.internetBill ?? 0);
-    const utilityBill = money(input.utilityBill ?? 0);
+    // Charges outside this unit type's line items are forced to zero rather
+    // than silently billed — a shop must never carry a water charge.
+    const applicable = new Set(lineItemsFor(category));
+    const line = (name: string, value: number | undefined) =>
+      applicable.has(name) ? money(value ?? 0) : 0;
+
+    const flatRent = money(input.flatRent ?? described.baseRent);
+    const electricityBill = line('electricityBill', input.electricityBill);
+    const waterBill = line('waterBill', input.waterBill);
+    const internetBill = line('internetBill', input.internetBill);
+    const utilityBill = line('utilityBill', input.utilityBill);
+    const serviceCharge = line('serviceCharge', input.serviceCharge);
+    const maintenanceCharge = line('maintenanceCharge', input.maintenanceCharge);
 
     const totalAmount = money(
-      flatRent + electricityBill + waterBill + internetBill + utilityBill + previousDue
+      flatRent +
+        electricityBill +
+        waterBill +
+        internetBill +
+        utilityBill +
+        serviceCharge +
+        maintenanceCharge +
+        previousDue
     );
 
     const invoice = await tx.invoice.create({
       data: {
-        flatId: input.flatId,
+        ...unitRef(category, unitId),
         month: input.month,
         year: input.year,
         flatRent,
@@ -326,6 +378,8 @@ export async function generateInvoice(input: GenerateInvoiceInput) {
         waterBill,
         internetBill,
         utilityBill,
+        serviceCharge,
+        maintenanceCharge,
         previousDue,
         totalAmount,
         dueDate: input.dueDate ?? new Date(input.year, input.month - 1, 10),
@@ -347,6 +401,8 @@ export interface UpdateInvoiceInput {
   waterBill?: number;
   internetBill?: number;
   utilityBill?: number;
+  serviceCharge?: number;
+  maintenanceCharge?: number;
   previousDue?: number;
   dueDate?: Date;
   paymentStatus?: PaymentStatus;
@@ -361,12 +417,16 @@ export async function updateInvoice(invoiceId: string, input: UpdateInvoiceInput
   const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
   if (!invoice) throw ApiError.notFound('Invoice not found');
 
+  // Every line the total is built from, including the shop-only ones —
+  // omitting them here would silently drop them from an edited shop invoice.
   const lines = {
     flatRent: money(input.flatRent ?? invoice.flatRent),
     electricityBill: money(input.electricityBill ?? invoice.electricityBill),
     waterBill: money(input.waterBill ?? invoice.waterBill),
     internetBill: money(input.internetBill ?? invoice.internetBill),
     utilityBill: money(input.utilityBill ?? invoice.utilityBill),
+    serviceCharge: money(input.serviceCharge ?? invoice.serviceCharge),
+    maintenanceCharge: money(input.maintenanceCharge ?? invoice.maintenanceCharge),
     previousDue: money(input.previousDue ?? invoice.previousDue),
   };
 

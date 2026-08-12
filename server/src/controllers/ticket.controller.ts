@@ -9,6 +9,7 @@ import { emitToAdmins, emitToUser } from '../sockets';
 const ticketInclude = {
   user: { select: { id: true, fullName: true, phone: true } },
   flat: { select: { id: true, flatNumber: true, floor: true, building: true } },
+  shop: { select: { id: true, shopNumber: true, shopName: true, address: true } },
 } satisfies Prisma.MaintenanceTicketInclude;
 
 export const createTicket = asyncHandler(async (req: Request, res: Response) => {
@@ -20,7 +21,9 @@ export const createTicket = asyncHandler(async (req: Request, res: Response) => 
   const ticket = await prisma.maintenanceTicket.create({
     data: {
       userId: req.user!.id,
+      // Whichever unit the reporter occupies — a flat or a shop.
       flatId: tenancy.flatId,
+      shopId: tenancy.shopId,
       category: req.body.category,
       description: req.body.description,
       imageUrl: req.file ? publicUrlFor(req.file.filename) : null,
@@ -45,7 +48,7 @@ export const listTickets = asyncHandler(async (req: Request, res: Response) => {
 
   // Tenants only ever see their own tickets, whatever filters they pass.
   const where: Prisma.MaintenanceTicketWhereInput = {
-    ...(req.user!.role === Role.TENANT ? { userId: req.user!.id } : {}),
+    ...(req.user!.role === Role.USER ? { userId: req.user!.id } : {}),
     ...(status ? { status } : {}),
     ...(category ? { category: category as never } : {}),
     ...(flatId && req.user!.role === Role.ADMIN ? { flatId } : {}),
@@ -77,7 +80,7 @@ export const getTicket = asyncHandler(async (req: Request, res: Response) => {
     include: ticketInclude,
   });
   if (!ticket) throw ApiError.notFound('Ticket not found');
-  if (req.user!.role === Role.TENANT && ticket.userId !== req.user!.id) {
+  if (req.user!.role === Role.USER && ticket.userId !== req.user!.id) {
     throw ApiError.forbidden('This ticket belongs to another tenant');
   }
   res.json({ success: true, data: ticket });

@@ -170,7 +170,8 @@ describe('formatting helpers', () => {
 
 describe('invoice schema', () => {
   const complete = {
-    flatId: '3f1a7c62-0e4d-4f1a-9c2b-8d6e5a4b3c21',
+    category: 'FLAT' as const,
+    unitId: '3f1a7c62-0e4d-4f1a-9c2b-8d6e5a4b3c21',
     month: 3,
     year: 2026,
     flatRent: 20000,
@@ -178,6 +179,8 @@ describe('invoice schema', () => {
     waterBill: 0,
     internetBill: 0,
     utilityBill: 0,
+    serviceCharge: 0,
+    maintenanceCharge: 0,
     dueDate: '2026-03-10',
   };
 
@@ -249,7 +252,7 @@ describe('admin user schema', () => {
     district: 'Dhaka',
     policeStation: 'Pallabi',
     division: 'Dhaka',
-    role: 'TENANT' as const,
+    role: 'USER' as const,
     isApproved: true,
     isPhoneVerified: true,
   };

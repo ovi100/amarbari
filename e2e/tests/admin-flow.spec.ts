@@ -81,6 +81,24 @@ test.describe('Admin journey', () => {
     await expect(page.getByRole('cell', { name: flatNumber }).first()).toBeVisible();
   });
 
+  test('adds a shop and sees it listed', async ({ page }) => {
+    await loginAsAdmin(page);
+    await page.goto('/admin/shops');
+
+    const shopNumber = `S-${String(Date.now()).slice(-6)}`;
+    await page.getByRole('button', { name: /add shop/i }).click();
+
+    const dialog = page.getByRole('dialog');
+    await dialog.locator('#shopName').fill('E2E Test Store');
+    await dialog.locator('#shopNumber').fill(shopNumber);
+    await dialog.locator('#shopBaseRent').fill('30000');
+    await dialog.locator('#address').fill('12 Test Road, Dhaka');
+    await dialog.getByRole('button', { name: /add shop/i }).click();
+
+    await expect(page.getByText(/shop added/i)).toBeVisible();
+    await expect(page.getByRole('cell', { name: shopNumber }).first()).toBeVisible();
+  });
+
   test('resolves a maintenance ticket end to end', async ({ page }) => {
     await loginAsAdmin(page);
     await page.goto('/admin/tickets');

@@ -1,5 +1,5 @@
 datasource db {
-  provider = "postgresql"
+  provider  = "postgresql"
   // Runtime traffic goes through the connection pooler (Supabase: pgbouncer on
   // port 6543). Migrations cannot: pgbouncer's transaction mode does not support
   // the session-level statements DDL needs, so `migrate deploy` uses directUrl.
@@ -14,7 +14,16 @@ generator client {
 
 enum Role {
   ADMIN
-  TENANT
+  USER
+}
+
+/// A rentable unit is either a flat or a shop. The two live in separate tables,
+/// so every record that hangs off one carries a nullable FK to each and exactly
+/// one of them is set — enforced by a CHECK constraint per table, not by
+/// application code alone.
+enum RentCategory {
+  FLAT
+  SHOP
 }
 
 enum IdentityType {
@@ -54,13 +63,13 @@ enum DynamicColumnType {
 }
 
 model User {
-  id              String   @id @default(uuid())
+  id              String  @id @default(uuid())
   fullName        String
-  phone           String   @unique
+  phone           String  @unique
   passwordHash    String
-  role            Role     @default(TENANT)
-  isPhoneVerified Boolean  @default(false)
-  isApproved      Boolean  @default(false)
+  role            Role    @default(USER)
+  isPhoneVerified Boolean @default(false)
+  isApproved      Boolean @default(false)
 
   // Profile Details
   dob            DateTime?
@@ -109,12 +118,17 @@ model Flat {
   updatedAt DateTime @updatedAt
 }
 
+/// `userId` is unique: a user holds at most one tenancy, which is half of the
+/// assignment invariant. Exactly one of `flatId` / `shopId` is set — see the
+/// `tenancy_one_unit` CHECK constraint in the migration.
 model Tenancy {
-  id     String @id @default(uuid())
-  userId String @unique
-  flatId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  flat   Flat   @relation(fields: [flatId], references: [id])
+  id     String  @id @default(uuid())
+  userId String  @unique
+  flatId String?
+  shopId String?
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  flat   Flat?   @relation(fields: [flatId], references: [id])
+  shop   Shop?   @relation(fields: [shopId], references: [id])
 
   startDate      DateTime  @default(now())
   endDate        DateTime?
@@ -128,23 +142,38 @@ model Tenancy {
   updatedAt DateTime @updatedAt
 
   @@index([flatId])
+  @@index([shopId])
 }
 
+/// Exactly one of `flatId` / `shopId` is set (`invoice_one_unit` CHECK).
+///
+/// Postgres treats NULLs as distinct in a unique index, so the two
+/// `@@unique` pairs below coexist: shop invoices all have `flatId = NULL` and
+/// therefore never collide on the flat index, and vice versa.
 model Invoice {
-  id     String @id @default(uuid())
-  flatId String
-  flat   Flat   @relation(fields: [flatId], references: [id])
+  id     String  @id @default(uuid())
+  flatId String?
+  shopId String?
+  flat   Flat?   @relation(fields: [flatId], references: [id])
+  shop   Shop?   @relation(fields: [shopId], references: [id])
   month  Int // 1 - 12
   year   Int
 
-  // Bill Breakdown
+  // Bill Breakdown. Which lines apply depends on the unit type — see
+  // LINE_ITEMS in services/rent.service.ts. `flatRent` is the rent line for
+  // both flats and shops.
   flatRent        Float
   electricityBill Float @default(0.0)
   waterBill       Float @default(0.0)
   internetBill    Float @default(0.0)
   utilityBill     Float @default(0.0)
-  previousDue     Float @default(0.0)
-  totalAmount     Float
+
+  // Shop-only lines; always 0 on a flat invoice.
+  serviceCharge     Float @default(0.0)
+  maintenanceCharge Float @default(0.0)
+
+  previousDue Float @default(0.0)
+  totalAmount Float
 
   paymentStatus   PaymentStatus @default(DUE)
   paidAmount      Float         @default(0.0)
@@ -158,13 +187,40 @@ model Invoice {
   updatedAt DateTime @updatedAt
 
   @@unique([flatId, month, year])
+  @@unique([shopId, month, year])
   @@index([year, month])
 }
 
+/// A commercial unit. Parallel to `Flat` rather than a variant of it, so it
+/// carries its own identifying fields: a trading name, a unit number and a
+/// street address.
+model Shop {
+  id         String  @id @default(uuid())
+  shopName   String
+  shopNumber String  @unique
+  address    String
+  isOccupied Boolean @default(false)
+
+  baseRent Float
+
+  tenancies Tenancy[]
+  invoices  Invoice[]
+  tickets   MaintenanceTicket[]
+  expenses  BuildingExpense[]
+
+  customFields Json @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Building-wide when both FKs are null; otherwise attributed to one unit.
 model BuildingExpense {
   id          String   @id @default(uuid())
   flatId      String?
+  shopId      String?
   flat        Flat?    @relation(fields: [flatId], references: [id])
+  shop        Shop?    @relation(fields: [shopId], references: [id])
   category    String // e.g. "Electricity", "Water Maintenance", "Internet Trunk"
   amount      Float
   description String?
@@ -177,12 +233,16 @@ model BuildingExpense {
   @@index([expenseDate])
 }
 
+/// Exactly one of `flatId` / `shopId` is set (`ticket_one_unit` CHECK) — the
+/// unit the reporter occupies.
 model MaintenanceTicket {
   id          String        @id @default(uuid())
   userId      String
-  flatId      String
+  flatId      String?
+  shopId      String?
   user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  flat        Flat          @relation(fields: [flatId], references: [id])
+  flat        Flat?         @relation(fields: [flatId], references: [id])
+  shop        Shop?         @relation(fields: [shopId], references: [id])
   category    IssueCategory
   description String
   imageUrl    String?

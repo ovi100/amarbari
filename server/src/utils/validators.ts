@@ -205,6 +205,33 @@ export const updateFlatSchema = flatSchema.partial().extend({
   isOccupied: z.boolean().optional(),
 });
 
+/** A shop is identified by a trading name, a unit number and a street address. */
+export const shopSchema = z.object({
+  shopName: z
+    .string()
+    .trim()
+    .min(2, 'Shop name is required')
+    .max(120, 'Shop name is too long')
+    .refine((v) => /\p{L}|\p{N}/u.test(v), 'Enter a valid shop name'),
+  shopNumber: z
+    .string()
+    .trim()
+    .min(1, 'Shop number is required')
+    .max(20)
+    .regex(/^[\p{L}\p{N}][\p{L}\p{N}\s/-]*$/u, 'Use letters, digits, spaces, - or / only'),
+  address: z.string().trim().min(5, 'Address is required').max(240, 'Address is too long'),
+  baseRent: z.coerce
+    .number()
+    .positive('Base rent must be greater than zero')
+    .max(MAX_AMOUNT, 'Base rent looks wrong'),
+});
+
+export const updateShopSchema = shopSchema.partial().extend({
+  isOccupied: z.boolean().optional(),
+});
+
+export const rentCategorySchema = z.enum(['FLAT', 'SHOP']);
+
 /**
  * A tenancy may be back-dated to record an existing arrangement, or dated
  * slightly ahead for an agreed move-in — but not by years either way.
@@ -252,17 +279,31 @@ export const expenseSchema = z.object({
     .optional(),
 });
 
-export const generateInvoiceSchema = z.object({
-  flatId: z.string().uuid(),
-  month: z.coerce.number().int().min(1).max(12),
-  year: z.coerce.number().int().min(2000).max(2100),
-  flatRent: money('Flat rent').optional(),
-  electricityBill: money('Electricity bill').default(0),
-  waterBill: money('Water bill').default(0),
-  internetBill: money('Internet bill').default(0),
-  utilityBill: money('Utility charge').default(0),
-  dueDate: z.coerce.date().optional(),
-});
+/**
+ * Invoicing targets a flat or a shop. `flatId` alone is still accepted so
+ * existing callers keep working; supplying `shopId` (or `category: 'SHOP'`)
+ * bills the commercial side instead.
+ */
+export const generateInvoiceSchema = z
+  .object({
+    category: rentCategorySchema.optional(),
+    flatId: z.string().uuid().optional(),
+    shopId: z.string().uuid().optional(),
+    month: z.coerce.number().int().min(1).max(12),
+    year: z.coerce.number().int().min(2000).max(2100),
+    flatRent: money('Rent').optional(),
+    electricityBill: money('Electricity bill').default(0),
+    waterBill: money('Water bill').default(0),
+    internetBill: money('Internet bill').default(0),
+    utilityBill: money('Utility charge').default(0),
+    serviceCharge: money('Service charge').default(0),
+    maintenanceCharge: money('Maintenance charge').default(0),
+    dueDate: z.coerce.date().optional(),
+  })
+  .refine((v) => Boolean(v.flatId) !== Boolean(v.shopId), {
+    message: 'Supply exactly one of flatId or shopId',
+    path: ['flatId'],
+  });
 
 export const recordPaymentSchema = z.object({
   amount: z.coerce
@@ -327,13 +368,13 @@ export const listQuerySchema = paginationSchema.extend({
 
 export const userListQuerySchema = listQuerySchema.extend({
   status: z.enum(['pending', 'approved']).optional(),
-  role: z.enum(['ADMIN', 'TENANT']).optional(),
+  role: z.enum(['ADMIN', 'USER']).optional(),
 });
 
 /** Admin-created accounts skip self-registration, so approval state is explicit. */
 export const adminCreateUserSchema = withIdentityCheck(
   registerBaseSchema.extend({
-    role: z.enum(['ADMIN', 'TENANT']).default('TENANT'),
+    role: z.enum(['ADMIN', 'USER']).default('USER'),
     isApproved: z.coerce.boolean().default(true),
     isPhoneVerified: z.coerce.boolean().default(true),
   })
@@ -360,7 +401,7 @@ export const adminUpdateUserSchema = withIdentityCheck(
       district: addressField('District').optional(),
       policeStation: addressField('Police station (thana)').optional(),
       division: addressField('Division').optional(),
-      role: z.enum(['ADMIN', 'TENANT']).optional(),
+      role: z.enum(['ADMIN', 'USER']).optional(),
       isApproved: z.boolean().optional(),
       isPhoneVerified: z.boolean().optional(),
     })
@@ -381,6 +422,8 @@ export const updateInvoiceSchema = z
     waterBill: money('Water bill').optional(),
     internetBill: money('Internet bill').optional(),
     utilityBill: money('Utility charge').optional(),
+    serviceCharge: money('Service charge').optional(),
+    maintenanceCharge: money('Maintenance charge').optional(),
     previousDue: money('Previous due').optional(),
     dueDate: z.coerce.date().optional(),
     paymentStatus: z.enum(['PAID', 'DUE', 'PARTIAL', 'DEDUCTED_FROM_ADVANCE']).optional(),

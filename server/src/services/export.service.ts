@@ -3,11 +3,13 @@ import ExcelJS from 'exceljs';
 import prisma from '../utils/prisma';
 import { AnalyticsRange, getAnalytics, recognizedRent } from './analytics.service';
 import { money } from './rent.service';
+import { describeUnit } from './unit.service';
 import { env } from '../config/env';
 
 const PAGE_SIZE = 500;
 
 interface InvoiceRow {
+  category: string;
   flatNumber: string;
   building: string;
   tenant: string;
@@ -17,6 +19,8 @@ interface InvoiceRow {
   waterBill: number;
   internetBill: number;
   utilityBill: number;
+  serviceCharge: number;
+  maintenanceCharge: number;
   previousDue: number;
   totalAmount: number;
   paidAmount: number;
@@ -54,6 +58,18 @@ async function* iterateInvoices(range: AnalyticsRange): AsyncGenerator<InvoiceRo
             },
           },
         },
+        shop: {
+          select: {
+            shopNumber: true,
+            shopName: true,
+            address: true,
+            tenancies: {
+              where: { isActive: true },
+              take: 1,
+              select: { user: { select: { fullName: true } } },
+            },
+          },
+        },
       },
     });
     if (page.length === 0) return;
@@ -64,16 +80,21 @@ async function* iterateInvoices(range: AnalyticsRange): AsyncGenerator<InvoiceRo
       if (key < fromKey || key > toKey) continue;
 
       const settled = money(invoice.paidAmount + invoice.advanceDeducted);
+      const unit = describeUnit(invoice);
       yield {
-        flatNumber: invoice.flat.flatNumber,
-        building: invoice.flat.building,
-        tenant: invoice.flat.tenancies[0]?.user.fullName ?? '—',
+        category: unit.category,
+        // For a shop these carry the shop number and its street address.
+        flatNumber: unit.number,
+        building: unit.location,
+        tenant: (invoice.flat ?? invoice.shop)?.tenancies[0]?.user.fullName ?? '—',
         period: `${String(invoice.month).padStart(2, '0')}/${invoice.year}`,
         flatRent: invoice.flatRent,
         electricityBill: invoice.electricityBill,
         waterBill: invoice.waterBill,
         internetBill: invoice.internetBill,
         utilityBill: invoice.utilityBill,
+        serviceCharge: invoice.serviceCharge,
+        maintenanceCharge: invoice.maintenanceCharge,
         previousDue: invoice.previousDue,
         totalAmount: invoice.totalAmount,
         paidAmount: invoice.paidAmount,
@@ -92,15 +113,19 @@ async function* iterateInvoices(range: AnalyticsRange): AsyncGenerator<InvoiceRo
 
 const INVOICE_COLUMNS: { header: string; key: keyof InvoiceRow; width: number; money?: boolean }[] =
   [
-    { header: 'Flat', key: 'flatNumber', width: 10 },
-    { header: 'Building', key: 'building', width: 18 },
-    { header: 'Tenant', key: 'tenant', width: 24 },
+    { header: 'Type', key: 'category', width: 8 },
+    // Holds the shop number / address on a shop invoice.
+    { header: 'Unit', key: 'flatNumber', width: 12 },
+    { header: 'Building / Address', key: 'building', width: 24 },
+    { header: 'User', key: 'tenant', width: 24 },
     { header: 'Period', key: 'period', width: 10 },
-    { header: 'Flat Rent', key: 'flatRent', width: 12, money: true },
+    { header: 'Rent', key: 'flatRent', width: 12, money: true },
     { header: 'Electricity', key: 'electricityBill', width: 12, money: true },
     { header: 'Water', key: 'waterBill', width: 12, money: true },
     { header: 'Internet', key: 'internetBill', width: 12, money: true },
     { header: 'Utility', key: 'utilityBill', width: 12, money: true },
+    { header: 'Service', key: 'serviceCharge', width: 12, money: true },
+    { header: 'Maintenance', key: 'maintenanceCharge', width: 13, money: true },
     { header: 'Previous Due', key: 'previousDue', width: 13, money: true },
     { header: 'Total', key: 'totalAmount', width: 13, money: true },
     { header: 'Paid', key: 'paidAmount', width: 12, money: true },

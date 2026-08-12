@@ -2,7 +2,15 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app';
 import { databaseAvailable, prisma, resetDatabase } from './helpers/db';
-import { bearer, createAdmin, createFlat, createTenancy, createUser } from './helpers/factory';
+import {
+  bearer,
+  createAdmin,
+  createFlat,
+  createShop,
+  createShopTenancy,
+  createTenancy,
+  createUser,
+} from './helpers/factory';
 import { generateInvoice } from '../src/services/rent.service';
 
 const app = createApp();
@@ -289,5 +297,124 @@ describe('rent deferral end-to-end (SRS 8.1 / QA 7.2)', () => {
       .expect(200)
       .expect('Content-Type', 'image/jpeg');
     expect(jpg.body.subarray(0, 3).toString('hex')).toBe('ffd8ff');
+  });
+});
+
+describe('shop invoicing', () => {
+  it('bills a shop with its own line items and ignores flat-only charges', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+    const user = await createUser();
+    const shop = await createShop(30000);
+    await createShopTenancy(user.id, shop.id);
+
+    const res = await request(app)
+      .post('/api/v1/invoices')
+      .set('Authorization', bearer(admin))
+      .send({
+        shopId: shop.id,
+        month: 5,
+        year: 2026,
+        electricityBill: 2000,
+        serviceCharge: 1500,
+        maintenanceCharge: 500,
+        // Flat-only charges must be dropped, not billed.
+        waterBill: 900,
+        internetBill: 800,
+      })
+      .expect(201);
+
+    const invoice = res.body.data;
+    expect(invoice.shopId).toBe(shop.id);
+    expect(invoice.flatId).toBeNull();
+    expect(invoice.flatRent).toBe(30000);
+    expect(invoice.serviceCharge).toBe(1500);
+    expect(invoice.maintenanceCharge).toBe(500);
+    expect(invoice.waterBill).toBe(0);
+    expect(invoice.internetBill).toBe(0);
+    expect(invoice.totalAmount).toBe(34000); // 30000 + 2000 + 1500 + 500
+  });
+
+  it('refuses to invoice a shop with no user assigned', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+    const vacant = await createShop();
+
+    const res = await request(app)
+      .post('/api/v1/invoices')
+      .set('Authorization', bearer(admin))
+      .send({ shopId: vacant.id, month: 5, year: 2026 })
+      .expect(400);
+
+    expect(res.body.error.message).toMatch(/no user assigned/i);
+    expect(await prisma.invoice.count({ where: { shopId: vacant.id } })).toBe(0);
+  });
+
+  it('requires exactly one of flatId or shopId', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+    const flat = await createFlat();
+    const shop = await createShop();
+
+    await request(app)
+      .post('/api/v1/invoices')
+      .set('Authorization', bearer(admin))
+      .send({ month: 5, year: 2026 })
+      .expect(400);
+
+    await request(app)
+      .post('/api/v1/invoices')
+      .set('Authorization', bearer(admin))
+      .send({ flatId: flat.id, shopId: shop.id, month: 5, year: 2026 })
+      .expect(400);
+  });
+
+  // Shop and flat invoices share the [unit, month, year] namespace via two
+  // separate unique indexes; NULLs are distinct in Postgres, so they coexist.
+  it('keeps flat and shop invoice uniqueness independent', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+    const flatUser = await createUser();
+    const shopUser = await createUser();
+    const flat = await createFlat(20000);
+    const shop = await createShop(30000);
+    await createTenancy(flatUser.id, flat.id);
+    await createShopTenancy(shopUser.id, shop.id);
+
+    await request(app)
+      .post('/api/v1/invoices')
+      .set('Authorization', bearer(admin))
+      .send({ flatId: flat.id, month: 6, year: 2026 })
+      .expect(201);
+
+    // Same month, different category — must not collide.
+    await request(app)
+      .post('/api/v1/invoices')
+      .set('Authorization', bearer(admin))
+      .send({ shopId: shop.id, month: 6, year: 2026 })
+      .expect(201);
+
+    // But a second shop invoice for that month is still a duplicate.
+    await request(app)
+      .post('/api/v1/invoices')
+      .set('Authorization', bearer(admin))
+      .send({ shopId: shop.id, month: 6, year: 2026 })
+      .expect(409);
+  });
+
+  it('serves a shop tenant their own rent summary', async () => {
+    if (!dbUp) return;
+    const user = await createUser();
+    const shop = await createShop(30000);
+    await createShopTenancy(user.id, shop.id, 60000);
+
+    const res = await request(app)
+      .get('/api/v1/rent/my-summary')
+      .set('Authorization', bearer(user))
+      .expect(200);
+
+    expect(res.body.data.unit).toMatchObject({ category: 'SHOP', number: shop.shopNumber });
+    expect(res.body.data.flat).toBeNull();
+    expect(res.body.data.totals.advanceDeposit).toBe(60000);
   });
 });

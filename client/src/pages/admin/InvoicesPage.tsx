@@ -6,7 +6,7 @@ import { Banknote, Download, Eye, FileImage, Pencil, Plus } from 'lucide-react';
 import { PageHeader } from '@/components/StatCard';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { PaymentBadge } from '@/components/ui/badge';
+import { Badge, PaymentBadge } from '@/components/ui/badge';
 import { Field, Input, Select } from '@/components/ui/form-controls';
 import { Alert } from '@/components/ui/feedback';
 import { DataTable, type DataTableColumn } from '@/components/ui/data-table';
@@ -23,8 +23,11 @@ import { errorMessage } from '@/services/api';
 import { MONTH_NAMES, formatDate, formatMoney, humanise, monthLabel } from '@/lib/utils';
 import { toast } from '@/store/toast.store';
 import {
+  INVOICE_LINE_ITEMS,
   InvoiceEditValues,
   InvoiceValues,
+  LINE_ITEM_LABELS,
+  type RentCategoryValue,
   buildPaymentSchema,
   invoiceEditSchema,
   invoiceSchema,
@@ -37,17 +40,24 @@ const now = new Date();
 const defaultDueDate = (month: number, year: number) =>
   `${year}-${String(month).padStart(2, '0')}-10`;
 
-const tenantOf = (invoice: Invoice) => invoice.flat?.tenancies?.[0]?.user.fullName ?? null;
+const tenantOf = (invoice: Invoice) =>
+  (invoice.flat ?? invoice.shop)?.tenancies?.[0]?.user.fullName ?? null;
 
-/** The line items shared by the detail view and the edit form. */
-const LINE_ITEMS = [
-  { key: 'flatRent', label: 'Flat rent' },
-  { key: 'electricityBill', label: 'Electricity' },
-  { key: 'waterBill', label: 'Water' },
-  { key: 'internetBill', label: 'Internet' },
-  { key: 'utilityBill', label: 'Utility & service' },
-  { key: 'previousDue', label: 'Previous due carried over' },
-] as const;
+/** Which category an invoice was issued against. */
+const categoryOf = (invoice: Invoice): RentCategoryValue => (invoice.shopId ? 'SHOP' : 'FLAT');
+
+/** "A-101", or "S-01 · Rahim Store". */
+const unitLabelOf = (invoice: Invoice) => {
+  if (invoice.shop) return `${invoice.shop.shopNumber} · ${invoice.shop.shopName}`;
+  return invoice.flat?.flatNumber ?? '—';
+};
+
+/** The line items to show for an invoice, driven by its category. */
+const lineItemsOf = (invoice: Invoice) =>
+  [...INVOICE_LINE_ITEMS[categoryOf(invoice)], 'previousDue'].map((key) => ({
+    key: key as keyof Invoice,
+    label: LINE_ITEM_LABELS[key] ?? key,
+  }));
 
 export default function InvoicesPage() {
   const queryClient = useQueryClient();
@@ -64,15 +74,20 @@ export default function InvoicesPage() {
     queryFn: () => invoiceApi.list(),
   });
   const flats = useQuery({ queryKey: ['admin', 'flats'], queryFn: () => adminApi.flats() });
+  const shops = useQuery({ queryKey: ['admin', 'shops'], queryFn: () => adminApi.shops() });
 
-  // An invoice needs somebody to bill, so only occupied flats are offered.
+  // An invoice needs somebody to bill, so only occupied units are offered —
+  // in whichever category the admin has selected.
   const billableFlats = (flats.data ?? []).filter((flat) => flat.isOccupied);
-  const vacantCount = (flats.data ?? []).length - billableFlats.length;
+  const billableShops = (shops.data ?? []).filter((shop) => shop.isOccupied);
+  const vacantCount =
+    (flats.data ?? []).length - billableFlats.length + ((shops.data ?? []).length - billableShops.length);
 
   const createForm = useForm<InvoiceValues>({
     resolver: zodResolver(invoiceSchema),
     defaultValues: {
-      flatId: '',
+      category: 'FLAT',
+      unitId: '',
       month: now.getMonth() + 1,
       year: now.getFullYear(),
       flatRent: 0,
@@ -80,6 +95,8 @@ export default function InvoicesPage() {
       waterBill: 0,
       internetBill: 0,
       utilityBill: 0,
+      serviceCharge: 0,
+      maintenanceCharge: 0,
       dueDate: defaultDueDate(now.getMonth() + 1, now.getFullYear()),
     },
   });
@@ -88,17 +105,24 @@ export default function InvoicesPage() {
 
   // Picking a flat prefills its base rent and the month prefills the due date,
   // so "state every charge" does not mean "retype what the system knows".
-  const selectedFlatId = createForm.watch('flatId');
+  const category = createForm.watch('category');
+  const selectedFlatId = createForm.watch('unitId');
+  const billableUnits = category === 'FLAT' ? billableFlats : billableShops;
   const selectedMonth = createForm.watch('month');
   const selectedYear = createForm.watch('year');
 
   useEffect(() => {
-    const flat = billableFlats.find((f) => f.id === selectedFlatId);
-    if (flat) createForm.setValue('flatRent', flat.baseRent, { shouldValidate: true });
+    const unit = [...billableFlats, ...billableShops].find((u) => u.id === selectedFlatId);
+    if (unit) createForm.setValue('flatRent', unit.baseRent, { shouldValidate: true });
     // billableFlats is derived from a query result and is stable enough here;
     // re-running on every fetch would clobber a manual override.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedFlatId]);
+
+  useEffect(() => {
+    createForm.setValue('unitId', '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [category]);
 
   useEffect(() => {
     const month = Number(selectedMonth);
@@ -112,7 +136,12 @@ export default function InvoicesPage() {
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['admin'] });
 
   const create = useMutation({
-    mutationFn: (values: InvoiceValues) => invoiceApi.create(values),
+    mutationFn: ({ category: cat, unitId, ...values }: InvoiceValues) =>
+      // The API takes exactly one of flatId / shopId.
+      invoiceApi.create({
+        ...values,
+        ...(cat === 'FLAT' ? { flatId: unitId } : { shopId: unitId }),
+      }),
     onSuccess: () => {
       toast.success('Invoice generated', 'Any carried-over due was folded in automatically.');
       setCreateOpen(false);
@@ -204,10 +233,20 @@ export default function InvoicesPage() {
         ),
       },
       {
-        id: 'flat',
-        header: 'Flat',
-        sortValue: (invoice) => invoice.flat?.flatNumber ?? null,
-        cell: (invoice) => invoice.flat?.flatNumber ?? '—',
+        id: 'category',
+        header: 'Type',
+        sortValue: categoryOf,
+        cell: (invoice) => (
+          <Badge variant={categoryOf(invoice) === 'SHOP' ? 'outline' : 'secondary'}>
+            {categoryOf(invoice) === 'SHOP' ? 'Shop' : 'Flat'}
+          </Badge>
+        ),
+      },
+      {
+        id: 'unit',
+        header: 'Unit',
+        sortValue: unitLabelOf,
+        cell: (invoice) => unitLabelOf(invoice),
       },
       {
         id: 'user',
@@ -287,6 +326,9 @@ export default function InvoicesPage() {
                 [
                   invoice.flat?.flatNumber ?? '',
                   invoice.flat?.building ?? '',
+                  invoice.shop?.shopNumber ?? '',
+                  invoice.shop?.shopName ?? '',
+                  invoice.shop?.address ?? '',
                   tenantOf(invoice) ?? '',
                   monthLabel(invoice.month, invoice.year),
                   invoice.paymentStatus,
@@ -348,24 +390,41 @@ export default function InvoicesPage() {
               className="max-h-[60vh] space-y-4 overflow-y-auto pr-1"
             >
               <Field
-                label="Flat"
-                htmlFor="flatId"
-                error={createForm.formState.errors.flatId?.message}
+                label="Rent category"
+                htmlFor="category"
+                error={createForm.formState.errors.category?.message}
+                required
+                hint="Shops are billed a service and maintenance charge instead of water and internet"
+              >
+                <Select id="category" {...createForm.register('category')}>
+                  <option value="FLAT">Flat</option>
+                  <option value="SHOP">Shop</option>
+                </Select>
+              </Field>
+
+              <Field
+                label={category === 'SHOP' ? 'Shop' : 'Flat'}
+                htmlFor="unitId"
+                error={createForm.formState.errors.unitId?.message}
                 required
                 hint={
                   vacantCount > 0
-                    ? `${vacantCount} vacant ${vacantCount === 1 ? 'flat is' : 'flats are'} hidden — a flat with no user assigned cannot be invoiced`
+                    ? `${vacantCount} vacant ${vacantCount === 1 ? 'unit is' : 'units are'} hidden — a unit with no user assigned cannot be invoiced`
                     : undefined
                 }
               >
-                <Select id="flatId" {...createForm.register('flatId')}>
-                  <option value="">Choose a flat…</option>
-                  {billableFlats.map((flat) => (
-                    <option key={flat.id} value={flat.id}>
-                      {flat.flatNumber} · {flat.tenancies?.[0]?.user.fullName ?? 'occupied'} ·{' '}
-                      {formatMoney(flat.baseRent)}
-                    </option>
-                  ))}
+                <Select id="unitId" {...createForm.register('unitId')}>
+                  <option value="">Choose a {category === 'SHOP' ? 'shop' : 'flat'}…</option>
+                  {billableUnits.map((unit) => {
+                    const label =
+                      'shopNumber' in unit ? `${unit.shopNumber} · ${unit.shopName}` : unit.flatNumber;
+                    return (
+                      <option key={unit.id} value={unit.id}>
+                        {label} · {unit.tenancies?.[0]?.user.fullName ?? 'occupied'} ·{' '}
+                        {formatMoney(unit.baseRent)}
+                      </option>
+                    );
+                  })}
                 </Select>
               </Field>
 
@@ -385,7 +444,7 @@ export default function InvoicesPage() {
               </div>
 
               <Field
-                label="Flat rent"
+                label="Rent"
                 htmlFor="flatRent"
                 error={createForm.formState.errors.flatRent?.message}
                 required
@@ -394,34 +453,28 @@ export default function InvoicesPage() {
                 <Input id="flatRent" type="number" min={0} step="0.01" {...createForm.register('flatRent')} />
               </Field>
 
+              {/* Only the charges that apply to this category — a shop must
+                  never be billed for water or internet. */}
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field
-                  label="Electricity"
-                  htmlFor="electricityBill"
-                  error={createForm.formState.errors.electricityBill?.message}
-                  required
-                >
-                  <Input id="electricityBill" type="number" min={0} step="0.01" {...createForm.register('electricityBill')} />
-                </Field>
-                <Field label="Water" htmlFor="waterBill" error={createForm.formState.errors.waterBill?.message} required>
-                  <Input id="waterBill" type="number" min={0} step="0.01" {...createForm.register('waterBill')} />
-                </Field>
-                <Field
-                  label="Internet"
-                  htmlFor="internetBill"
-                  error={createForm.formState.errors.internetBill?.message}
-                  required
-                >
-                  <Input id="internetBill" type="number" min={0} step="0.01" {...createForm.register('internetBill')} />
-                </Field>
-                <Field
-                  label="Utility & service"
-                  htmlFor="utilityBill"
-                  error={createForm.formState.errors.utilityBill?.message}
-                  required
-                >
-                  <Input id="utilityBill" type="number" min={0} step="0.01" {...createForm.register('utilityBill')} />
-                </Field>
+                {INVOICE_LINE_ITEMS[category]
+                  .filter((name) => name !== 'flatRent')
+                  .map((name) => (
+                    <Field
+                      key={name}
+                      label={LINE_ITEM_LABELS[name] ?? name}
+                      htmlFor={name}
+                      error={createForm.formState.errors[name]?.message}
+                      required
+                    >
+                      <Input
+                        id={name}
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        {...createForm.register(name)}
+                      />
+                    </Field>
+                  ))}
               </div>
 
               <Field label="Due date" htmlFor="dueDate" error={createForm.formState.errors.dueDate?.message} required>
@@ -451,12 +504,12 @@ export default function InvoicesPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {viewing && `${monthLabel(viewing.month, viewing.year)} · flat ${viewing.flat?.flatNumber ?? '—'}`}
+              {viewing && `${monthLabel(viewing.month, viewing.year)} · ${unitLabelOf(viewing)}`}
             </DialogTitle>
             <DialogDescription>
               {viewing && (
                 <>
-                  Issued to {tenantOf(viewing) ?? 'an unassigned flat'} · due{' '}
+                  Issued to {tenantOf(viewing) ?? 'an unassigned unit'} · due{' '}
                   {formatDate(viewing.dueDate)}
                 </>
               )}
@@ -473,10 +526,10 @@ export default function InvoicesPage() {
               </div>
 
               <dl className="divide-y rounded-md border">
-                {LINE_ITEMS.map(({ key, label }) => (
+                {lineItemsOf(viewing).map(({ key, label }) => (
                   <div key={key} className="flex items-center justify-between px-3 py-2 text-sm">
                     <dt className="text-muted-foreground">{label}</dt>
-                    <dd className="tabular-nums">{formatMoney(viewing[key])}</dd>
+                    <dd className="tabular-nums">{formatMoney(viewing[key] as number)}</dd>
                   </div>
                 ))}
                 <div className="flex items-center justify-between bg-muted/40 px-3 py-2.5 text-sm font-semibold">
@@ -540,7 +593,7 @@ export default function InvoicesPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {editing && `Edit ${monthLabel(editing.month, editing.year)} · flat ${editing.flat?.flatNumber ?? '—'}`}
+              {editing && `Edit ${monthLabel(editing.month, editing.year)} · ${unitLabelOf(editing)}`}
             </DialogTitle>
             <DialogDescription>
               The total and payment status are recalculated from these lines and what has already

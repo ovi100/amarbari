@@ -60,6 +60,21 @@ async function main() {
     );
   }
 
+  // Two shops so the commercial side of the portfolio is not empty on a fresh
+  // install. Assignment is left to the admin, as it is for flats.
+  const shopSpecs = [
+    { shopNumber: 'S-01', shopName: 'Rahim General Store', address: '12 Mirpur Road, Dhaka', baseRent: 32000 },
+    { shopNumber: 'S-02', shopName: 'Nila Tailors', address: '14 Mirpur Road, Dhaka', baseRent: 26000 },
+  ];
+
+  for (const spec of shopSpecs) {
+    await prisma.shop.upsert({
+      where: { shopNumber: spec.shopNumber },
+      update: {},
+      create: spec,
+    });
+  }
+
   const tenantSpecs = [
     {
       fullName: 'Ayesha Siddika',
@@ -143,7 +158,7 @@ async function main() {
         fullName: spec.fullName,
         phone: spec.phone,
         passwordHash: tenantHash,
-        role: Role.TENANT,
+        role: Role.USER,
         isPhoneVerified: true,
         isApproved: spec.isApproved,
         dob: spec.dob,

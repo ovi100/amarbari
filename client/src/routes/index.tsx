@@ -21,6 +21,7 @@ const ProfilePage = lazy(() => import('@/pages/tenant/ProfilePage'));
 const AdminDashboard = lazy(() => import('@/pages/admin/AdminDashboard'));
 const UsersPage = lazy(() => import('@/pages/admin/UsersPage'));
 const FlatsPage = lazy(() => import('@/pages/admin/FlatsPage'));
+const ShopsPage = lazy(() => import('@/pages/admin/ShopsPage'));
 const InvoicesPage = lazy(() => import('@/pages/admin/InvoicesPage'));
 const ExpensesPage = lazy(() => import('@/pages/admin/ExpensesPage'));
 const AdminTicketsPage = lazy(() => import('@/pages/admin/AdminTicketsPage'));
@@ -56,7 +57,7 @@ export function AppRoutes() {
         <Route path="/verify" element={<VerifyOtpPage />} />
 
         <Route element={<RequireAuth />}>
-          <Route element={<RequireRole role="TENANT" />}>
+          <Route element={<RequireRole role="USER" />}>
             <Route path="/app" element={<AppLayout variant="tenant" />}>
               <Route index element={<TenantDashboard />} />
               <Route path="rent" element={<RentPage />} />
@@ -73,6 +74,7 @@ export function AppRoutes() {
               {/* Bookmarks from before the rename still land in the right place. */}
               <Route path="tenants" element={<Navigate to="/admin/users" replace />} />
               <Route path="flats" element={<FlatsPage />} />
+              <Route path="shops" element={<ShopsPage />} />
               <Route path="invoices" element={<InvoicesPage />} />
               <Route path="expenses" element={<ExpensesPage />} />
               <Route path="tickets" element={<AdminTicketsPage />} />

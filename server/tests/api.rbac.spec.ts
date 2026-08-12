@@ -28,6 +28,8 @@ const ADMIN_ROUTES: [string, string][] = [
   ['post', '/api/v1/admin/users'],
   ['get', '/api/v1/admin/flats'],
   ['post', '/api/v1/admin/flats'],
+  ['get', '/api/v1/admin/shops'],
+  ['post', '/api/v1/admin/shops'],
   ['get', '/api/v1/admin/expenses'],
   ['post', '/api/v1/admin/expenses'],
   ['post', '/api/v1/admin/tenancies'],
@@ -95,14 +97,33 @@ describe('RBAC (SRS 7.2 — tenant must get 403, never 200)', () => {
     }
   });
 
-  it('blocks a phone-unverified tenant', async () => {
+  // Phone verification is off by default, so this asserts the gate only when
+  // it is switched on — matching `login`, which shares the same condition.
+  it('blocks a phone-unverified tenant when verification is enabled', async () => {
+    if (!dbUp) return;
+    process.env.OTP_VERIFICATION_REQUIRED = 'true';
+    try {
+      const tenant = await createUser({ isPhoneVerified: false } as never);
+      const res = await request(app)
+        .get('/api/v1/rent/my-summary')
+        .set('Authorization', bearer(tenant));
+      expect(res.status).toBe(403);
+      expect(res.body.error.message).toMatch(/not verified/i);
+    } finally {
+      delete process.env.OTP_VERIFICATION_REQUIRED;
+    }
+  });
+
+  it('lets a phone-unverified tenant through while verification is off', async () => {
     if (!dbUp) return;
     const tenant = await createUser({ isPhoneVerified: false } as never);
-    const res = await request(app)
+    const flat = await createFlat();
+    await createTenancy(tenant.id, flat.id);
+
+    await request(app)
       .get('/api/v1/rent/my-summary')
-      .set('Authorization', bearer(tenant));
-    expect(res.status).toBe(403);
-    expect(res.body.error.message).toMatch(/not verified/i);
+      .set('Authorization', bearer(tenant))
+      .expect(200);
   });
 
   it('stops a tenant reading another tenant’s invoice', async () => {

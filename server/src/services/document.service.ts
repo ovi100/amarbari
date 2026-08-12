@@ -3,6 +3,7 @@ import PDFDocument from 'pdfkit';
 import { createCanvas, loadImage, Image } from '@napi-rs/canvas';
 import prisma from '../utils/prisma';
 import { ApiError } from '../utils/ApiError';
+import { LINE_ITEM_LABELS, describeUnit, lineItemsFor } from './unit.service';
 import { env } from '../config/env';
 import { money } from './rent.service';
 
@@ -12,9 +13,12 @@ export interface InvoiceDocumentData {
   issuedOn: string;
   dueDate: string;
   status: string;
+  unitCategory: 'FLAT' | 'SHOP';
+  unitLabel: string;
+  /** Shop invoices carry the shop number here, and its address in `building`. */
   flatNumber: string;
   building: string;
-  floor: number;
+  floor: number | null;
   tenantName: string;
   tenantPhone: string;
   lineItems: { label: string; amount: number }[];
@@ -38,11 +42,23 @@ export async function loadInvoiceDocumentData(invoiceId: string): Promise<Invoic
           },
         },
       },
+      shop: {
+        include: {
+          tenancies: {
+            where: { isActive: true },
+            take: 1,
+            include: { user: { select: { fullName: true, phone: true } } },
+          },
+        },
+      },
     },
   });
   if (!invoice) throw ApiError.notFound('Invoice not found');
 
-  const tenant = invoice.flat.tenancies[0]?.user;
+  // One of the two is set; `describeUnit` resolves which without the caller
+  // caring whether this is a flat or a shop.
+  const unit = describeUnit(invoice);
+  const tenant = (invoice.flat ?? invoice.shop)!.tenancies[0]?.user;
   const settled = money(invoice.paidAmount + invoice.advanceDeducted);
 
   return {
@@ -51,19 +67,23 @@ export async function loadInvoiceDocumentData(invoiceId: string): Promise<Invoic
     issuedOn: invoice.createdAt.toISOString().slice(0, 10),
     dueDate: invoice.dueDate.toISOString().slice(0, 10),
     status: invoice.paymentStatus.replace(/_/g, ' '),
-    flatNumber: invoice.flat.flatNumber,
-    building: invoice.flat.building,
-    floor: invoice.flat.floor,
+    unitCategory: unit.category,
+    unitLabel: unit.label,
+    // `flatNumber` / `building` keep their names for the renderers; for a shop
+    // they carry the shop number and its address.
+    flatNumber: unit.number,
+    building: unit.location,
+    floor: invoice.flat?.floor ?? null,
     tenantName: tenant?.fullName ?? 'Vacant',
     tenantPhone: tenant?.phone ?? '—',
+    // Only the lines that apply to this unit type, plus any carried balance.
     lineItems: [
-      { label: 'Flat Rent', amount: invoice.flatRent },
-      { label: 'Electricity Bill', amount: invoice.electricityBill },
-      { label: 'Water Bill', amount: invoice.waterBill },
-      { label: 'Internet Bill', amount: invoice.internetBill },
-      { label: 'Utility & Service Charge', amount: invoice.utilityBill },
+      ...lineItemsFor(unit.category).map((name) => ({
+        label: LINE_ITEM_LABELS[name] ?? name,
+        amount: invoice[name as keyof typeof invoice] as number,
+      })),
       { label: 'Previous Due (carried forward)', amount: invoice.previousDue },
-    ].filter((item) => item.amount > 0 || item.label === 'Flat Rent'),
+    ].filter((item) => item.amount > 0 || item.label === LINE_ITEM_LABELS.flatRent),
     totalAmount: invoice.totalAmount,
     paidAmount: invoice.paidAmount,
     advanceDeducted: invoice.advanceDeducted,
