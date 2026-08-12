@@ -281,6 +281,7 @@ diagnose a browser CORS error.
 
 | Symptom                                                       | Cause                                                                            |
 | ------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Build fails with `TS7006: Parameter 'req' implicitly has an 'any' type` | `npm ci` ran without `--include=dev`; `NODE_ENV=production` made it skip `@types/express` |
 | SPA loads but every request fails with a CORS error            | `CORS_ORIGINS` missing the SPA origin, or has a trailing slash — it must match exactly |
 | SPA still calls `localhost:4000`                               | `VITE_*` vars changed but the static site was not **rebuilt** (step 5)           |
 | `prepared statement "s0" already exists`                       | `?pgbouncer=true` missing from `DATABASE_URL`                                    |

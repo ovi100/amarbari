@@ -15,9 +15,14 @@ services:
     plan: starter
     region: singapore
     rootDir: server
+    # `--include=dev` is required, not stylistic: NODE_ENV=production below is
+    # applied during the build too, and npm honours it by omitting
+    # devDependencies. That drops @types/express and typescript, and the build
+    # dies on implicit-any errors in code that is perfectly valid.
+    #
     # `prisma generate` must run on the build machine — the client is generated
     # into node_modules and is not committed.
-    buildCommand: npm ci && npx prisma generate && npm run build
+    buildCommand: npm ci --include=dev && npx prisma generate && npm run build
     # Migrations run after the build, before traffic is switched over, so a
     # failed migration aborts the deploy instead of half-serving a new schema.
     preDeployCommand: npx prisma migrate deploy
@@ -147,7 +152,9 @@ services:
     name: amarbari
     runtime: static
     rootDir: client
-    buildCommand: npm ci && npm run build
+    # vite and typescript are devDependencies here too — pin the behaviour
+    # explicitly so it cannot break if NODE_ENV is ever set on this service.
+    buildCommand: npm ci --include=dev && npm run build
     staticPublishPath: dist
     autoDeploy: true
 
