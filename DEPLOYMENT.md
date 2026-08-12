@@ -77,8 +77,18 @@ postgresql://postgres.<ref>:<password>@aws-0-ap-southeast-1.pooler.supabase.com:
 postgresql://postgres.<ref>:<password>@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres
 ```
 
-Three things here are easy to get wrong and each produces a confusing failure:
+Four things here are easy to get wrong and each produces a confusing failure:
 
+- **The username must be `postgres.<project-ref>`, not `postgres`.** Both pooler URLs identify
+  the project through the username, because every Supabase project shares one pooler hostname.
+  Copy the URI from the dashboard rather than typing it, and if you retype the password by hand
+  do not touch the part before the `:`. A bare `postgres` gives you
+  `P1000: Authentication failed`.
+- **Percent-encode special characters in the password.** The password sits inside a URL, so a
+  literal `@`, `:`, `/`, `?`, `#`, `&` or `%` in it will be mis-parsed — usually also surfacing
+  as `P1000`. `@` becomes `%40`, `#` becomes `%23`, `%` becomes `%25`. The simplest escape from
+  this is to reset the password (**Settings → Database → Reset database password**) and let
+  Supabase generate an alphanumeric one.
 - **`?pgbouncer=true` is required.** Without it Prisma prepares statements that pgbouncer's
   transaction mode cannot hold across connections, and you get intermittent
   `prepared statement "s0" already exists` errors under load — not on the first request.
@@ -282,6 +292,7 @@ diagnose a browser CORS error.
 | Symptom                                                       | Cause                                                                            |
 | ------------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | Build fails with `TS7006: Parameter 'req' implicitly has an 'any' type` | `npm ci` ran without `--include=dev`; `NODE_ENV=production` made it skip `@types/express` |
+| `P1000: Authentication failed ... credentials for \`postgres\`` | Username is `postgres` instead of `postgres.<project-ref>`, or the password needs percent-encoding |
 | SPA loads but every request fails with a CORS error            | `CORS_ORIGINS` missing the SPA origin, or has a trailing slash — it must match exactly |
 | SPA still calls `localhost:4000`                               | `VITE_*` vars changed but the static site was not **rebuilt** (step 5)           |
 | `prepared statement "s0" already exists`                       | `?pgbouncer=true` missing from `DATABASE_URL`                                    |
