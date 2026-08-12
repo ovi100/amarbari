@@ -14,7 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Table, TableBody, TableCell, TableEmpty, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { DataTable } from '@/components/ui/data-table';
 import { invoiceApi, rentApi } from '@/services/endpoints';
 import { errorMessage } from '@/services/api';
 import { formatMoney, monthLabel } from '@/lib/utils';
@@ -124,62 +124,77 @@ export default function RentPage() {
             <CardDescription>Every invoice issued during your tenancy</CardDescription>
           </CardHeader>
           <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Period</TableHead>
-                  <TableHead className="text-right">Total</TableHead>
-                  <TableHead className="text-right">Outstanding</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Receipt</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {invoices.length === 0 ? (
-                  <TableEmpty colSpan={5}>No invoices have been issued yet.</TableEmpty>
-                ) : (
-                  invoices.map((invoice) => {
-                    const label = `${monthLabel(invoice.month, invoice.year)}`;
-                    return (
-                      <TableRow key={invoice.id}>
-                        <TableCell className="font-medium">{label}</TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatMoney(invoice.totalAmount)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatMoney(invoice.outstanding)}
-                        </TableCell>
-                        <TableCell>
-                          <PaymentBadge status={invoice.paymentStatus} />
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex justify-end gap-1">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              loading={downloading === `${invoice.id}-pdf`}
-                              onClick={() => download(invoice.id, 'pdf', label.replace(' ', '-'))}
-                              aria-label={`Download ${label} invoice as PDF`}
-                            >
-                              <Download className="h-3.5 w-3.5" /> PDF
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              loading={downloading === `${invoice.id}-jpg`}
-                              onClick={() => download(invoice.id, 'jpg', label.replace(' ', '-'))}
-                              aria-label={`Download ${label} receipt as JPG`}
-                            >
-                              <FileImage className="h-3.5 w-3.5" /> JPG
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })
-                )}
-              </TableBody>
-            </Table>
+            <DataTable
+              rows={invoices}
+              getRowId={(invoice) => invoice.id}
+              exportFileName="AmarBari-My-Invoices"
+              searchPlaceholder="Search your invoices by month or status…"
+              searchableText={(invoice) =>
+                `${monthLabel(invoice.month, invoice.year)} ${invoice.paymentStatus}`
+              }
+              emptyMessage="No invoices have been issued yet."
+              initialPageSize={10}
+              initialSort={{ columnId: 'period', direction: 'desc' }}
+              columns={[
+                {
+                  id: 'period',
+                  header: 'Period',
+                  sortValue: (invoice) => invoice.year * 100 + invoice.month,
+                  exportValue: (invoice) => monthLabel(invoice.month, invoice.year),
+                  cell: (invoice) => (
+                    <span className="font-medium">{monthLabel(invoice.month, invoice.year)}</span>
+                  ),
+                },
+                {
+                  id: 'total',
+                  header: 'Total',
+                  align: 'right',
+                  sortValue: (invoice) => invoice.totalAmount,
+                  cell: (invoice) => (
+                    <span className="tabular-nums">{formatMoney(invoice.totalAmount)}</span>
+                  ),
+                },
+                {
+                  id: 'outstanding',
+                  header: 'Outstanding',
+                  align: 'right',
+                  sortValue: (invoice) => invoice.outstanding,
+                  cell: (invoice) => (
+                    <span className="tabular-nums">{formatMoney(invoice.outstanding)}</span>
+                  ),
+                },
+                {
+                  id: 'status',
+                  header: 'Status',
+                  sortValue: (invoice) => invoice.paymentStatus,
+                  cell: (invoice) => <PaymentBadge status={invoice.paymentStatus} />,
+                },
+              ]}
+              actions={[
+                {
+                  label: 'PDF',
+                  icon: Download,
+                  disabled: (invoice) => downloading === `${invoice.id}-pdf`,
+                  onSelect: (invoice) =>
+                    download(
+                      invoice.id,
+                      'pdf',
+                      monthLabel(invoice.month, invoice.year).replace(' ', '-')
+                    ),
+                },
+                {
+                  label: 'JPG',
+                  icon: FileImage,
+                  disabled: (invoice) => downloading === `${invoice.id}-jpg`,
+                  onSelect: (invoice) =>
+                    download(
+                      invoice.id,
+                      'jpg',
+                      monthLabel(invoice.month, invoice.year).replace(' ', '-')
+                    ),
+                },
+              ]}
+            />
           </CardContent>
         </Card>
 

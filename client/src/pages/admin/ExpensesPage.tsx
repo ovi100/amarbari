@@ -1,13 +1,14 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { ClipboardList, Plus, Trash2 } from 'lucide-react';
+import { ClipboardList, Pencil, Plus, Trash2 } from 'lucide-react';
 import { PageHeader, StatCard } from '@/components/StatCard';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Field, Input, Select, Textarea } from '@/components/ui/form-controls';
-import { Alert, EmptyState, LoadingState } from '@/components/ui/feedback';
+import { Alert } from '@/components/ui/feedback';
+import { DataTable, type DataTableColumn } from '@/components/ui/data-table';
 import {
   Dialog,
   DialogContent,
@@ -16,12 +17,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { adminApi } from '@/services/endpoints';
 import { errorMessage } from '@/services/api';
 import { formatDate, formatMoney } from '@/lib/utils';
 import { toast } from '@/store/toast.store';
-import { ExpenseValues, expenseSchema } from '@/lib/schemas';
+import { CUSTOM_EXPENSE_CATEGORY, ExpenseValues, expenseSchema } from '@/lib/schemas';
+import type { BuildingExpense } from '@/types';
 
 const COMMON_CATEGORIES = [
   'Electricity',
@@ -31,58 +32,93 @@ const COMMON_CATEGORIES = [
   'Cleaning & Security',
   'Repairs',
   'Municipal Tax',
-  'Other',
 ];
+
+const today = () => new Date().toISOString().slice(0, 10);
+
+const blankExpense: ExpenseValues = {
+  category: 'Electricity',
+  customCategory: '',
+  amount: 0,
+  description: '',
+  expenseDate: today(),
+  flatId: '',
+};
 
 export default function ExpensesPage() {
   const queryClient = useQueryClient();
-  const [createOpen, setCreateOpen] = useState(false);
+  const [editor, setEditor] = useState<{ expense: BuildingExpense | null } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<BuildingExpense | null>(null);
 
   const expenses = useQuery({ queryKey: ['admin', 'expenses'], queryFn: () => adminApi.expenses() });
-  const flats = useQuery({ queryKey: ['admin', 'flats'], queryFn: adminApi.flats });
+  const flats = useQuery({ queryKey: ['admin', 'flats'], queryFn: () => adminApi.flats() });
 
-  const {
-    register,
-    handleSubmit,
-    reset,
-    formState: { errors },
-  } = useForm<ExpenseValues>({
+  const form = useForm<ExpenseValues>({
     resolver: zodResolver(expenseSchema),
-    defaultValues: {
-      category: 'Electricity',
-      amount: 0,
-      description: '',
-      expenseDate: new Date().toISOString().slice(0, 10),
-      flatId: '',
-    },
+    defaultValues: blankExpense,
   });
 
-  const create = useMutation({
-    mutationFn: (values: ExpenseValues) =>
-      adminApi.createExpense({
-        category: values.category,
+  const isCustom = form.watch('category') === CUSTOM_EXPENSE_CATEGORY;
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['admin'] });
+
+  const save = useMutation({
+    mutationFn: (values: ExpenseValues) => {
+      const payload = {
+        // The sentinel never reaches the API — the typed name replaces it.
+        category:
+          values.category === CUSTOM_EXPENSE_CATEGORY
+            ? values.customCategory!.trim()
+            : values.category,
         amount: values.amount,
         description: values.description || undefined,
         expenseDate: values.expenseDate || undefined,
         flatId: values.flatId || null,
-      }),
-    onSuccess: () => {
-      toast.success('Expense recorded');
-      setCreateOpen(false);
-      reset();
-      queryClient.invalidateQueries({ queryKey: ['admin'] });
+      };
+      return editor?.expense
+        ? adminApi.updateExpense(editor.expense.id, payload)
+        : adminApi.createExpense(payload);
     },
-    onError: (err) => toast.error('Could not record the expense', errorMessage(err)),
+    onSuccess: () => {
+      toast.success(editor?.expense ? 'Expense updated' : 'Expense recorded');
+      setEditor(null);
+      form.reset(blankExpense);
+      invalidate();
+    },
+    onError: (err) =>
+      toast.error(
+        editor?.expense ? 'Could not update the expense' : 'Could not record the expense',
+        errorMessage(err)
+      ),
   });
 
   const remove = useMutation({
     mutationFn: (id: string) => adminApi.deleteExpense(id),
     onSuccess: () => {
       toast.success('Expense deleted');
-      queryClient.invalidateQueries({ queryKey: ['admin'] });
+      setConfirmDelete(null);
+      invalidate();
     },
     onError: (err) => toast.error('Could not delete the expense', errorMessage(err)),
   });
+
+  const openCreate = () => {
+    form.reset({ ...blankExpense, expenseDate: today() });
+    setEditor({ expense: null });
+  };
+
+  const openEdit = (expense: BuildingExpense) => {
+    const known = COMMON_CATEGORIES.includes(expense.category);
+    form.reset({
+      category: known ? expense.category : CUSTOM_EXPENSE_CATEGORY,
+      customCategory: known ? '' : expense.category,
+      amount: expense.amount,
+      description: expense.description ?? '',
+      expenseDate: expense.expenseDate.slice(0, 10),
+      flatId: expense.flatId ?? '',
+    });
+    setEditor({ expense });
+  };
 
   const rows = expenses.data?.expenses ?? [];
   const total = rows.reduce((sum, e) => sum + e.amount, 0);
@@ -90,13 +126,56 @@ export default function ExpensesPage() {
     .filter((e) => new Date(e.expenseDate).getMonth() === new Date().getMonth())
     .reduce((sum, e) => sum + e.amount, 0);
 
+  const columns = useMemo<DataTableColumn<BuildingExpense>[]>(
+    () => [
+      {
+        id: 'expenseDate',
+        header: 'Date',
+        sortValue: (expense) => expense.expenseDate,
+        exportValue: (expense) => formatDate(expense.expenseDate),
+        cell: (expense) => <span className="whitespace-nowrap">{formatDate(expense.expenseDate)}</span>,
+      },
+      {
+        id: 'category',
+        header: 'Category',
+        sortValue: (expense) => expense.category,
+        cell: (expense) => <span className="font-medium">{expense.category}</span>,
+      },
+      {
+        id: 'flat',
+        header: 'Flat',
+        sortValue: (expense) => expense.flat?.flatNumber ?? 'Building-wide',
+        cell: (expense) => (
+          <span className="text-muted-foreground">{expense.flat?.flatNumber ?? 'Building-wide'}</span>
+        ),
+      },
+      {
+        id: 'description',
+        header: 'Description',
+        sortValue: (expense) => expense.description ?? null,
+        className: 'max-w-[280px] truncate',
+        cell: (expense) => (
+          <span className="text-muted-foreground">{expense.description ?? '—'}</span>
+        ),
+      },
+      {
+        id: 'amount',
+        header: 'Amount',
+        align: 'right',
+        sortValue: (expense) => expense.amount,
+        cell: (expense) => <span className="tabular-nums">{formatMoney(expense.amount)}</span>,
+      },
+    ],
+    []
+  );
+
   return (
     <>
       <PageHeader
         title="Building expenses"
         description="Operating costs deducted from rent revenue to give net profit."
         actions={
-          <Button onClick={() => setCreateOpen(true)}>
+          <Button onClick={openCreate}>
             <Plus className="h-4 w-4" /> Record expense
           </Button>
         }
@@ -110,68 +189,38 @@ export default function ExpensesPage() {
 
       <Card>
         <CardContent className="pt-5">
-          {expenses.isLoading ? (
-            <LoadingState label="Loading expenses…" />
-          ) : expenses.isError ? (
+          {expenses.isError ? (
             <Alert tone="error" title="Could not load expenses">
               {errorMessage(expenses.error)}
             </Alert>
-          ) : rows.length === 0 ? (
-            <EmptyState
-              icon={ClipboardList}
-              title="No expenses recorded"
-              description="Log utilities and maintenance costs so profit reflects reality."
-            />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Flat</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((expense) => (
-                  <TableRow key={expense.id}>
-                    <TableCell className="whitespace-nowrap">
-                      {formatDate(expense.expenseDate)}
-                    </TableCell>
-                    <TableCell className="font-medium">{expense.category}</TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {expense.flat?.flatNumber ?? 'Building-wide'}
-                    </TableCell>
-                    <TableCell className="max-w-[280px] truncate text-muted-foreground">
-                      {expense.description ?? '—'}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatMoney(expense.amount)}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => remove.mutate(expense.id)}
-                        aria-label={`Delete ${expense.category} expense`}
-                      >
-                        <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <DataTable
+              rows={rows}
+              columns={columns}
+              getRowId={(expense) => expense.id}
+              isLoading={expenses.isLoading}
+              exportFileName="AmarBari-Expenses"
+              searchPlaceholder="Search by category, description or flat…"
+              searchableText={(expense) =>
+                [expense.category, expense.description ?? '', expense.flat?.flatNumber ?? ''].join(' ')
+              }
+              onServerSearch={async (query) => (await adminApi.expenses({ search: query })).expenses}
+              emptyMessage="No expenses recorded — log utilities and maintenance so profit reflects reality."
+              initialSort={{ columnId: 'expenseDate', direction: 'desc' }}
+              actions={[
+                { label: 'Edit', icon: Pencil, onSelect: openEdit },
+                { label: 'Delete', icon: Trash2, destructive: true, onSelect: setConfirmDelete },
+              ]}
+            />
           )}
         </CardContent>
       </Card>
 
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+      {/* Record / edit an expense */}
+      <Dialog open={Boolean(editor)} onOpenChange={(open) => !open && setEditor(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Record an expense</DialogTitle>
+            <DialogTitle>{editor?.expense ? 'Edit expense' : 'Record an expense'}</DialogTitle>
             <DialogDescription>
               Leave the flat unset for costs that apply to the whole building.
             </DialogDescription>
@@ -179,30 +228,50 @@ export default function ExpensesPage() {
 
           <form
             id="expense-form"
-            onSubmit={handleSubmit((values) => create.mutate(values))}
+            onSubmit={form.handleSubmit((values) => save.mutate(values))}
             noValidate
             className="space-y-4"
           >
-            <Field label="Category" htmlFor="category" error={errors.category?.message} required>
-              <Input id="category" list="expense-categories" {...register('category')} />
-              <datalist id="expense-categories">
+            <Field label="Category" htmlFor="category" error={form.formState.errors.category?.message} required>
+              <Select id="category" {...form.register('category')}>
                 {COMMON_CATEGORIES.map((category) => (
-                  <option key={category} value={category} />
+                  <option key={category} value={category}>
+                    {category}
+                  </option>
                 ))}
-              </datalist>
+                <option value={CUSTOM_EXPENSE_CATEGORY}>Other — enter a custom category…</option>
+              </Select>
             </Field>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Amount" htmlFor="amount" error={errors.amount?.message} required>
-                <Input id="amount" type="number" min={0} step="0.01" {...register('amount')} />
+            {/* Revealed only when nothing in the list fits. */}
+            {isCustom && (
+              <Field
+                label="Custom category"
+                htmlFor="customCategory"
+                error={form.formState.errors.customCategory?.message}
+                required
+                hint="Name it as you would want it to read on the expense report"
+              >
+                <Input
+                  id="customCategory"
+                  placeholder="e.g. Rooftop waterproofing"
+                  autoFocus
+                  {...form.register('customCategory')}
+                />
               </Field>
-              <Field label="Date" htmlFor="expenseDate" error={errors.expenseDate?.message}>
-                <Input id="expenseDate" type="date" {...register('expenseDate')} />
+            )}
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Amount" htmlFor="amount" error={form.formState.errors.amount?.message} required>
+                <Input id="amount" type="number" min={0} step="0.01" {...form.register('amount')} />
+              </Field>
+              <Field label="Date" htmlFor="expenseDate" error={form.formState.errors.expenseDate?.message}>
+                <Input id="expenseDate" type="date" {...form.register('expenseDate')} />
               </Field>
             </div>
 
-            <Field label="Flat (optional)" htmlFor="flatId" error={errors.flatId?.message}>
-              <Select id="flatId" {...register('flatId')}>
+            <Field label="Flat (optional)" htmlFor="flatId" error={form.formState.errors.flatId?.message}>
+              <Select id="flatId" {...form.register('flatId')}>
                 <option value="">Building-wide</option>
                 {(flats.data ?? []).map((flat) => (
                   <option key={flat.id} value={flat.id}>
@@ -212,17 +281,45 @@ export default function ExpensesPage() {
               </Select>
             </Field>
 
-            <Field label="Description" htmlFor="description" error={errors.description?.message}>
-              <Textarea id="description" rows={3} {...register('description')} />
+            <Field label="Description" htmlFor="description" error={form.formState.errors.description?.message}>
+              <Textarea id="description" rows={3} {...form.register('description')} />
             </Field>
           </form>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateOpen(false)}>
+            <Button variant="outline" onClick={() => setEditor(null)}>
               Cancel
             </Button>
-            <Button type="submit" form="expense-form" loading={create.isPending}>
-              Record expense
+            <Button type="submit" form="expense-form" loading={save.isPending}>
+              {editor?.expense ? 'Save changes' : 'Record expense'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation */}
+      <Dialog open={Boolean(confirmDelete)} onOpenChange={(open) => !open && setConfirmDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete this expense?</DialogTitle>
+            <DialogDescription>
+              {confirmDelete &&
+                `${confirmDelete.category} · ${formatMoney(confirmDelete.amount)} · ${formatDate(
+                  confirmDelete.expenseDate
+                )}`}
+            </DialogDescription>
+          </DialogHeader>
+          <Alert tone="warning">Net profit for the affected period will move accordingly.</Alert>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmDelete(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              loading={remove.isPending}
+              onClick={() => confirmDelete && remove.mutate(confirmDelete.id)}
+            >
+              Delete expense
             </Button>
           </DialogFooter>
         </DialogContent>

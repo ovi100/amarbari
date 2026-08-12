@@ -40,7 +40,7 @@ const TENANT_NAV: NavItem[] = [
 
 const ADMIN_NAV: NavItem[] = [
   { to: '/admin', label: 'Overview', icon: LayoutDashboard, end: true },
-  { to: '/admin/tenants', label: 'Tenants', icon: Users },
+  { to: '/admin/users', label: 'Users', icon: Users },
   { to: '/admin/flats', label: 'Flats', icon: Building2 },
   { to: '/admin/invoices', label: 'Invoices', icon: Receipt },
   { to: '/admin/expenses', label: 'Expenses', icon: ClipboardList },
@@ -152,7 +152,7 @@ export function AppLayout({ variant }: { variant: 'tenant' | 'admin' }) {
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium">{user?.fullName}</p>
           <p className="truncate text-xs text-muted-foreground">
-            {variant === 'admin' ? 'Property Admin' : user?.tenancy?.flat?.flatNumber ?? 'Tenant'}
+            {variant === 'admin' ? 'Property Admin' : user?.tenancy?.flat?.flatNumber ?? 'Resident'}
           </p>
         </div>
       </div>

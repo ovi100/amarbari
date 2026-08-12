@@ -2,12 +2,23 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Columns3, Database, Lock, Pencil, Search, Trash2 } from 'lucide-react';
+import {
+  ArrowDown,
+  ArrowUp,
+  ChevronsUpDown,
+  Columns3,
+  Database,
+  Download,
+  Lock,
+  Pencil,
+  Search,
+  Trash2,
+} from 'lucide-react';
 import { PageHeader } from '@/components/StatCard';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Field, Input, Label, Select } from '@/components/ui/form-controls';
+import { Field, Input, Label, PasswordInput, Select } from '@/components/ui/form-controls';
 import { Alert, EmptyState, LoadingState } from '@/components/ui/feedback';
 import {
   Dialog,
@@ -61,10 +72,41 @@ function toInputValue(column: ColumnMeta, value: unknown): string {
   return String(value);
 }
 
+/** Flattens a record into the CSV row for the currently visible columns. */
+function toCsv(table: string, columns: ColumnMeta[], records: Record<string, unknown>[]) {
+  const cell = (value: unknown) => {
+    const text =
+      value === null || value === undefined
+        ? ''
+        : typeof value === 'object'
+          ? JSON.stringify(value)
+          : String(value);
+    return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  };
+
+  const body = [
+    columns.map((column) => cell(column.label ?? column.name)).join(','),
+    ...records.map((record) => columns.map((column) => cell(record[column.name])).join(',')),
+  ].join('\r\n');
+
+  // BOM so Excel reads the UTF-8 correctly.
+  const blob = new Blob([`﻿${body}`], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `AmarBari-${table}-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 export default function DataControlPage() {
   const queryClient = useQueryClient();
   const [table, setTable] = useState('User');
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [sort, setSort] = useState<{ columnId: string; direction: 'asc' | 'desc' } | null>(null);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [editing, setEditing] = useState<Record<string, unknown> | null>(null);
@@ -82,9 +124,27 @@ export default function DataControlPage() {
 
   const tables = useQuery({ queryKey: ['admin', 'tables'], queryFn: adminApi.tables });
   const data = useQuery({
-    queryKey: ['admin', 'table', table, page, debouncedSearch],
-    queryFn: () => adminApi.table(table, { page, search: debouncedSearch || undefined }),
+    // Sorting and paging happen in the database here, not on the client: this
+    // grid addresses whole tables, which can be far larger than one page.
+    queryKey: ['admin', 'table', table, page, pageSize, debouncedSearch, sort],
+    queryFn: () =>
+      adminApi.table(table, {
+        page,
+        pageSize,
+        search: debouncedSearch || undefined,
+        sortBy: sort?.columnId,
+        sortDir: sort?.direction,
+      }),
   });
+
+  const toggleSort = (columnName: string) => {
+    setPage(1);
+    setSort((current) => {
+      if (current?.columnId !== columnName) return { columnId: columnName, direction: 'asc' };
+      if (current.direction === 'asc') return { columnId: columnName, direction: 'desc' };
+      return null;
+    });
+  };
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['admin', 'table'] });
@@ -223,6 +283,7 @@ export default function DataControlPage() {
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               id="search"
+              type="search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder={`Search across ${table} text fields…`}
@@ -230,6 +291,14 @@ export default function DataControlPage() {
             />
           </div>
         </div>
+
+        <Button
+          variant="outline"
+          onClick={() => toCsv(table, data.data?.columns ?? [], data.data?.records ?? [])}
+          disabled={(data.data?.records ?? []).length === 0}
+        >
+          <Download className="h-4 w-4" /> Export CSV
+        </Button>
       </div>
 
       {dynamicColumns.length > 0 && (
@@ -270,8 +339,18 @@ export default function DataControlPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    {columns.map((column) => (
-                      <TableHead key={column.name}>
+                    {columns.map((column) => {
+                      // Dynamic columns live inside a JSON blob, so the database
+                      // cannot order by them.
+                      const sortable = !column.isDynamic;
+                      const active = sort?.columnId === column.name;
+                      const SortIcon = !active
+                        ? ChevronsUpDown
+                        : sort!.direction === 'asc'
+                          ? ArrowUp
+                          : ArrowDown;
+
+                      const label = (
                         <span className="inline-flex items-center gap-1">
                           {column.label ?? column.name}
                           {column.isDynamic && (
@@ -281,8 +360,33 @@ export default function DataControlPage() {
                           )}
                           {column.isReadOnly && <Lock className="h-3 w-3 opacity-50" />}
                         </span>
-                      </TableHead>
-                    ))}
+                      );
+
+                      return (
+                        <TableHead
+                          key={column.name}
+                          aria-sort={
+                            active ? (sort!.direction === 'asc' ? 'ascending' : 'descending') : 'none'
+                          }
+                        >
+                          {sortable ? (
+                            <button
+                              type="button"
+                              onClick={() => toggleSort(column.name)}
+                              className={cn(
+                                'inline-flex items-center gap-1.5 rounded transition-colors hover:text-foreground',
+                                active && 'text-foreground'
+                              )}
+                            >
+                              {label}
+                              <SortIcon className={cn('h-3 w-3', !active && 'opacity-40')} aria-hidden />
+                            </button>
+                          ) : (
+                            label
+                          )}
+                        </TableHead>
+                      );
+                    })}
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -330,9 +434,26 @@ export default function DataControlPage() {
 
               {pagination && (
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                  <p className="text-sm text-muted-foreground">
-                    {pagination.total} records · page {pagination.page} of {pagination.totalPages}
-                  </p>
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <span>
+                      {pagination.total} records · page {pagination.page} of {pagination.totalPages}
+                    </span>
+                    <Select
+                      aria-label="Rows per page"
+                      value={String(pageSize)}
+                      onChange={(e) => {
+                        setPageSize(Number(e.target.value));
+                        setPage(1);
+                      }}
+                      className="h-8 w-auto py-0 text-xs sm:h-8"
+                    >
+                      {[10, 25, 50, 100].map((size) => (
+                        <option key={size} value={size}>
+                          {size} / page
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
                   <div className="flex gap-2">
                     <Button
                       variant="outline"
@@ -422,9 +543,8 @@ export default function DataControlPage() {
                 htmlFor="field-password"
                 hint="Leave blank to keep the current password"
               >
-                <Input
+                <PasswordInput
                   id="field-password"
-                  type="password"
                   autoComplete="new-password"
                   value={draft.password ?? ''}
                   onChange={(e) => setDraft((prev) => ({ ...prev, password: e.target.value }))}

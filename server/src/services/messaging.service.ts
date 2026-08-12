@@ -2,7 +2,7 @@ import axios from 'axios';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
 
-export type MessagingChannel = 'WHATSAPP' | 'IMO';
+export type MessagingChannel = 'WHATSAPP' | 'IMO' | 'SMS';
 
 export interface DispatchResult {
   delivered: boolean;
@@ -12,13 +12,30 @@ export interface DispatchResult {
   error?: string;
 }
 
+/** Twilio is only usable once both halves of the API credential are present. */
+export function isTwilioConfigured(): boolean {
+  const { accountSid, authToken, from, messagingServiceSid } = env.messaging.twilio;
+  return Boolean(accountSid && authToken && (from || messagingServiceSid));
+}
+
 /**
- * Free OTP delivery over WhatsApp / IMO (SRS 3.1.2).
+ * Picks the provider for a channel. SMS goes to Twilio, IMO has no public
+ * business API so it rides the generic outbound webhook, and WhatsApp follows
+ * MESSAGING_PROVIDER. Anything unconfigured falls back to `console` so the flow
+ * stays completable in dev and CI.
+ */
+function providerFor(channel: MessagingChannel): string {
+  if (channel === 'SMS') return isTwilioConfigured() ? 'twilio' : 'console';
+  if (channel === 'IMO') return 'webhook';
+  return env.messaging.provider;
+}
+
+/**
+ * OTP delivery over WhatsApp / IMO / SMS (SRS 3.1.2).
  *
  * Providers are pluggable via MESSAGING_PROVIDER. The default `console`
  * provider logs the message, which keeps registration testable locally and in
- * CI without a paid gateway. IMO has no public business API, so it is routed
- * through the generic outbound webhook provider.
+ * CI without a paid gateway.
  */
 export async function sendOtpMessage(
   phone: string,
@@ -38,10 +55,25 @@ export async function sendMessage(
   body: string,
   channel: MessagingChannel = 'WHATSAPP'
 ): Promise<DispatchResult> {
-  const provider = channel === 'IMO' ? 'webhook' : env.messaging.provider;
+  const provider = providerFor(channel);
 
   try {
     switch (provider) {
+      case 'twilio': {
+        const { accountSid, authToken, from, messagingServiceSid } = env.messaging.twilio;
+        // Twilio's REST API is a plain form POST with basic auth — no SDK needed.
+        const params = new URLSearchParams({ To: phone, Body: body });
+        if (messagingServiceSid) params.set('MessagingServiceSid', messagingServiceSid);
+        else params.set('From', from);
+
+        const res = await axios.post(
+          `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
+          params,
+          { auth: { username: accountSid, password: authToken }, timeout: 10_000 }
+        );
+        return { delivered: true, provider, channel, reference: String(res.data?.sid ?? '') };
+      }
+
       case 'ultramsg': {
         const { ultramsgInstanceId: instance, ultramsgToken: token } = env.messaging;
         const res = await axios.post(

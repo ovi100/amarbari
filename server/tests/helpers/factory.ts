@@ -18,7 +18,9 @@ export async function createUser(overrides: Partial<Parameters<typeof prisma.use
       isApproved: true,
       familyMembers: 2,
       identityType: IdentityType.NID,
-      identityNumber: `NID-TEST-${n}-${Date.now()}`,
+      // A valid 13-digit NID (see IDENTITY_PATTERNS), unique per run: the last
+      // 9 digits of the clock plus the sequence counter.
+      identityNumber: `${String(Date.now()).slice(-9)}${String(n).padStart(4, '0')}`,
       village: 'Test Village',
       postOffice: 'Test PO',
       district: 'Dhaka',

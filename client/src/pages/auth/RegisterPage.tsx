@@ -4,11 +4,13 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { AuthShell } from './AuthShell';
 import { Button } from '@/components/ui/button';
-import { Field, Input, Select } from '@/components/ui/form-controls';
+import { Field, Input, PasswordInput, Select } from '@/components/ui/form-controls';
 import { Alert } from '@/components/ui/feedback';
 import { RegisterValues, registerSchema } from '@/lib/schemas';
+import { IDENTITY_RULES } from '@/lib/identity';
 import { authApi } from '@/services/endpoints';
 import { errorMessage } from '@/services/api';
+import type { IdentityType } from '@/types';
 
 const DIVISIONS = [
   'Dhaka', 'Chattogram', 'Khulna', 'Rajshahi',
@@ -22,6 +24,7 @@ export default function RegisterPage() {
   const {
     register,
     handleSubmit,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<RegisterValues>({
     resolver: zodResolver(registerSchema),
@@ -41,6 +44,8 @@ export default function RegisterPage() {
       division: 'Dhaka',
     },
   });
+
+  const identityRule = IDENTITY_RULES[watch('identityType')] ?? IDENTITY_RULES.NID;
 
   const onSubmit = handleSubmit(async (values) => {
     setFormError(null);
@@ -108,9 +113,11 @@ export default function RegisterPage() {
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Identity type" htmlFor="identityType" error={errors.identityType?.message} required>
               <Select id="identityType" {...register('identityType')}>
-                <option value="NID">National ID (NID)</option>
-                <option value="PASSPORT">Passport</option>
-                <option value="BIRTH_CERTIFICATE">Birth certificate</option>
+                {(Object.keys(IDENTITY_RULES) as IdentityType[]).map((type) => (
+                  <option key={type} value={type}>
+                    {IDENTITY_RULES[type].label}
+                  </option>
+                ))}
               </Select>
             </Field>
             <Field
@@ -118,8 +125,18 @@ export default function RegisterPage() {
               htmlFor="identityNumber"
               error={errors.identityNumber?.message}
               required
+              // The expected shape changes with the document type, so the hint
+              // has to track the select rather than sit as static copy.
+              hint={identityRule.hint}
             >
-              <Input id="identityNumber" {...register('identityNumber')} />
+              <Input
+                id="identityNumber"
+                inputMode={identityRule.inputMode}
+                maxLength={identityRule.maxLength}
+                placeholder={identityRule.placeholder}
+                autoComplete="off"
+                {...register('identityNumber')}
+              />
             </Field>
           </div>
         </section>
@@ -165,7 +182,7 @@ export default function RegisterPage() {
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Password" htmlFor="password" error={errors.password?.message} required
               hint="At least 8 characters, with a letter and a number">
-              <Input id="password" type="password" autoComplete="new-password" {...register('password')} />
+              <PasswordInput id="password" autoComplete="new-password" {...register('password')} />
             </Field>
             <Field
               label="Confirm password"
@@ -173,9 +190,8 @@ export default function RegisterPage() {
               error={errors.confirmPassword?.message}
               required
             >
-              <Input
+              <PasswordInput
                 id="confirmPassword"
-                type="password"
                 autoComplete="new-password"
                 {...register('confirmPassword')}
               />

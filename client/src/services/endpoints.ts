@@ -35,13 +35,15 @@ export interface RegisterPayload {
   division: string;
 }
 
+export type OtpChannel = 'WHATSAPP' | 'IMO' | 'SMS';
+
 export const authApi = {
   register: (payload: RegisterPayload) =>
     unwrap<{ user: User; otp: { expiresInSeconds: number; delivered: boolean; devCode?: string }; message: string }>(
       api.post('/auth/register', payload)
     ),
 
-  sendOtp: (phone: string, channel: 'WHATSAPP' | 'IMO' = 'WHATSAPP') =>
+  sendOtp: (phone: string, channel: OtpChannel = 'WHATSAPP') =>
     unwrap<{ expiresInSeconds: number; delivered: boolean; devCode?: string; message: string }>(
       api.post('/auth/send-otp', { phone, channel })
     ),
@@ -82,12 +84,25 @@ function downloadBlob(blob: Blob, filename: string) {
 }
 
 export const invoiceApi = {
-  list: (page = 1, pageSize = 20) =>
+  list: (params: { page?: number; pageSize?: number; search?: string } = {}) =>
     unwrap<{ invoices: Invoice[]; pagination: Pagination }>(
-      api.get('/invoices', { params: { page, pageSize } })
+      api.get('/invoices', { params: { page: 1, pageSize: 100, ...params } })
     ),
 
   get: (id: string) => unwrap<Invoice>(api.get(`/invoices/${id}`)),
+
+  update: (
+    id: string,
+    payload: {
+      flatRent?: number;
+      electricityBill?: number;
+      waterBill?: number;
+      internetBill?: number;
+      utilityBill?: number;
+      previousDue?: number;
+      dueDate?: string;
+    }
+  ) => unwrap<Invoice>(api.patch(`/invoices/${id}`, payload)),
 
   create: (payload: {
     flatId: string;
@@ -150,30 +165,71 @@ export const chatApi = {
 
 // --- Admin ------------------------------------------------------------------
 
+export interface AdminUserPayload {
+  fullName: string;
+  phone: string;
+  password?: string;
+  dob?: string;
+  familyMembers: number;
+  identityType: string;
+  identityNumber: string;
+  village: string;
+  postOffice: string;
+  district: string;
+  policeStation: string;
+  division: string;
+  role?: 'ADMIN' | 'TENANT';
+  isApproved?: boolean;
+  isPhoneVerified?: boolean;
+}
+
 export const adminApi = {
-  tenants: (params: { page?: number; pageSize?: number; status?: 'pending' | 'approved' } = {}) =>
-    unwrap<{ tenants: User[]; pagination: Pagination }>(
-      api.get('/admin/tenants', { params: { page: 1, pageSize: 50, ...params } })
+  users: (
+    params: {
+      page?: number;
+      pageSize?: number;
+      status?: 'pending' | 'approved';
+      role?: 'ADMIN' | 'TENANT';
+      search?: string;
+    } = {}
+  ) =>
+    unwrap<{ users: User[]; pagination: Pagination }>(
+      api.get('/admin/users', { params: { page: 1, pageSize: 100, ...params } })
     ),
 
-  tenant: (id: string) => unwrap<User>(api.get(`/admin/tenants/${id}`)),
+  user: (id: string) => unwrap<User>(api.get(`/admin/users/${id}`)),
+
+  createUser: (payload: AdminUserPayload) => unwrap<User>(api.post('/admin/users', payload)),
+
+  updateUser: (id: string, payload: Partial<AdminUserPayload>) =>
+    unwrap<User>(api.patch(`/admin/users/${id}`, payload)),
 
   setApproval: (id: string, approved: boolean, reason?: string) =>
-    unwrap<{ tenant: User; message: string }>(
-      api.patch(`/admin/tenants/${id}/approval`, { approved, reason })
+    unwrap<{ user: User; message: string }>(
+      api.patch(`/admin/users/${id}/approval`, { approved, reason })
     ),
 
-  deleteTenant: (id: string) => unwrap<{ deleted: string }>(api.delete(`/admin/tenants/${id}`)),
+  deleteUser: (id: string) => unwrap<{ deleted: string }>(api.delete(`/admin/users/${id}`)),
 
-  flats: () => unwrap<Flat[]>(api.get('/admin/flats')),
+  flats: (params: { search?: string } = {}) => unwrap<Flat[]>(api.get('/admin/flats', { params })),
 
   createFlat: (payload: { flatNumber: string; floor: number; building: string; baseRent: number }) =>
     unwrap<Flat>(api.post('/admin/flats', payload)),
 
-  updateFlat: (id: string, payload: Partial<Flat>) =>
-    unwrap<Flat>(api.patch(`/admin/flats/${id}`, payload)),
+  updateFlat: (
+    id: string,
+    payload: { flatNumber?: string; floor?: number; building?: string; baseRent?: number }
+  ) => unwrap<Flat>(api.patch(`/admin/flats/${id}`, payload)),
 
   deleteFlat: (id: string) => unwrap<{ deleted: string }>(api.delete(`/admin/flats/${id}`)),
+
+  /** Assigns a user to a flat. The server rejects a second occupant. */
+  assignFlat: (
+    flatId: string,
+    payload: { userId: string; advanceDeposit?: number; startDate?: string }
+  ) => unwrap<Tenancy>(api.post(`/admin/flats/${flatId}/tenancy`, payload)),
+
+  releaseFlat: (flatId: string) => unwrap<Tenancy>(api.delete(`/admin/flats/${flatId}/tenancy`)),
 
   createTenancy: (payload: {
     userId: string;
@@ -185,9 +241,9 @@ export const adminApi = {
   updateTenancy: (id: string, payload: Partial<Tenancy>) =>
     unwrap<Tenancy>(api.patch(`/admin/tenancies/${id}`, payload)),
 
-  expenses: (page = 1, pageSize = 50) =>
+  expenses: (params: { page?: number; pageSize?: number; search?: string } = {}) =>
     unwrap<{ expenses: BuildingExpense[]; pagination: Pagination }>(
-      api.get('/admin/expenses', { params: { page, pageSize } })
+      api.get('/admin/expenses', { params: { page: 1, pageSize: 100, ...params } })
     ),
 
   createExpense: (payload: {
@@ -197,6 +253,17 @@ export const adminApi = {
     expenseDate?: string;
     flatId?: string | null;
   }) => unwrap<BuildingExpense>(api.post('/admin/expenses', payload)),
+
+  updateExpense: (
+    id: string,
+    payload: {
+      category?: string;
+      amount?: number;
+      description?: string;
+      expenseDate?: string;
+      flatId?: string | null;
+    }
+  ) => unwrap<BuildingExpense>(api.patch(`/admin/expenses/${id}`, payload)),
 
   deleteExpense: (id: string) => unwrap<{ deleted: string }>(api.delete(`/admin/expenses/${id}`)),
 

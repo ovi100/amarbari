@@ -183,6 +183,25 @@ Set one of:
 IMO has no public business API, so IMO delivery goes through the generic `webhook` provider
 pointed at whatever relay you use.
 
+### SMS over Twilio
+
+`MESSAGING_PROVIDER` covers the WhatsApp channel. The **SMS** option on the verification screen is
+routed separately, to Twilio:
+
+| Variable                        | Notes                                                            |
+| ------------------------------- | ---------------------------------------------------------------- |
+| `TWILIO_ACCOUNT_SID`            | Required                                                          |
+| `TWILIO_AUTH_TOKEN`             | Required                                                          |
+| `TWILIO_FROM_NUMBER`            | A number you own, in E.164 (`+1...`)                              |
+| `TWILIO_MESSAGING_SERVICE_SID`  | Alternative to the above, and preferred — wins if both are set    |
+
+Leave them blank and SMS degrades to the console provider instead of erroring, which is what keeps
+local dev and CI free. **In production that degradation is silent**, so if you offer the SMS channel
+at all, set the credentials and send yourself a real test code.
+
+Bangladesh requires sender-ID pre-registration with most carriers; budget for that before
+promising SMS to users.
+
 Send yourself a test OTP through the live registration form before letting real tenants near it.
 
 ---

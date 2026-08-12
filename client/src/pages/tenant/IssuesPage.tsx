@@ -13,7 +13,12 @@ import { ticketApi } from '@/services/endpoints';
 import { API_BASE_URL, errorMessage } from '@/services/api';
 import { formatDateTime, humanise } from '@/lib/utils';
 import { toast } from '@/store/toast.store';
-import { TicketValues, ticketSchema } from '@/lib/schemas';
+import {
+  TICKET_IMAGE_ACCEPT,
+  TicketValues,
+  ticketSchema,
+  validateTicketImage,
+} from '@/lib/schemas';
 import { useSocketEvent } from '@/hooks/useSocket';
 import type { MaintenanceTicket } from '@/types';
 
@@ -25,7 +30,6 @@ const CATEGORIES = [
   'OTHER',
 ] as const;
 
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const ASSET_ORIGIN = API_BASE_URL.replace(/\/api\/v1\/?$/, '');
 
 export default function IssuesPage() {
@@ -68,12 +72,10 @@ export default function IssuesPage() {
 
   const onPickImage = (file: File | undefined) => {
     if (!file) return;
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-      setImageError('Only JPEG, PNG or WebP images are accepted');
-      return;
-    }
-    if (file.size > MAX_IMAGE_BYTES) {
-      setImageError('Image must be 5MB or smaller');
+    // Shared with the server's upload filter so the two cannot drift apart.
+    const error = validateTicketImage(file);
+    if (error) {
+      setImageError(error);
       return;
     }
     setImageError(null);
@@ -164,7 +166,7 @@ export default function IssuesPage() {
                     <input
                       ref={fileRef}
                       type="file"
-                      accept="image/jpeg,image/png,image/webp"
+                      accept={TICKET_IMAGE_ACCEPT}
                       className="sr-only"
                       onChange={(e) => onPickImage(e.target.files?.[0])}
                     />

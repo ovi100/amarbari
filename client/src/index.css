@@ -40,6 +40,13 @@
 
     --radius: 0.65rem;
 
+    /* Tells the browser to paint its own widgets — native <select> popups, the
+       date-picker calendar, scrollbars — in the light palette. Without this the
+       OS keeps rendering them light even under .dark, which is what made the
+       date field's calendar icon invisible and every dropdown list read as
+       light-on-light. */
+    color-scheme: light;
+
     /* Chart palette — validated for CVD separation and contrast in both modes.
        Slot order is fixed: 1 revenue, 2 expenses, 3 profit. Never cycle it. */
     --viz-1: #2a78d6;
@@ -50,6 +57,8 @@
   }
 
   .dark {
+    color-scheme: dark;
+
     --background: 222 47% 8%;
     --foreground: 210 40% 96%;
 
@@ -109,6 +118,39 @@
      directly rather than via @apply, which would be self-referential. */
   [lang='bn'] {
     font-family: 'Hind Siliguri', 'Noto Sans Bengali', system-ui, sans-serif;
+  }
+
+  /* The calendar button ships as a fixed dark glyph; tint it to the current
+     foreground so it stays visible on the dark surface, and give the whole
+     field a hit target instead of the 8px default. */
+  input[type='date']::-webkit-calendar-picker-indicator,
+  input[type='month']::-webkit-calendar-picker-indicator,
+  input[type='time']::-webkit-calendar-picker-indicator {
+    cursor: pointer;
+    opacity: 0.65;
+    padding: 0.25rem;
+    border-radius: 0.25rem;
+    transition: opacity 0.15s ease;
+  }
+
+  input[type='date']:hover::-webkit-calendar-picker-indicator,
+  input[type='month']:hover::-webkit-calendar-picker-indicator,
+  input[type='time']:hover::-webkit-calendar-picker-indicator {
+    opacity: 1;
+    background-color: hsl(var(--muted));
+  }
+
+  .dark input[type='date']::-webkit-calendar-picker-indicator,
+  .dark input[type='month']::-webkit-calendar-picker-indicator,
+  .dark input[type='time']::-webkit-calendar-picker-indicator {
+    filter: invert(1);
+  }
+
+  /* Firefox and some Linux builds ignore color-scheme for option lists. */
+  select option,
+  select optgroup {
+    background-color: hsl(var(--popover));
+    color: hsl(var(--popover-foreground));
   }
 
   ::-webkit-scrollbar {

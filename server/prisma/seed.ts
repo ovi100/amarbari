@@ -28,7 +28,7 @@ async function main() {
       dob: new Date('1978-04-12'),
       familyMembers: 4,
       identityType: IdentityType.NID,
-      identityNumber: 'NID-ADMIN-0001',
+      identityNumber: '1978041200011',
       village: 'Uttara Sector 7',
       postOffice: 'Uttara Model Town',
       district: 'Dhaka',
@@ -64,7 +64,7 @@ async function main() {
     {
       fullName: 'Ayesha Siddika',
       phone: '+8801711111111',
-      identityNumber: 'NID-1990-000111',
+      identityNumber: '1990021800111',
       identityType: IdentityType.NID,
       dob: new Date('1990-02-18'),
       familyMembers: 3,
@@ -81,7 +81,7 @@ async function main() {
     {
       fullName: 'Tanvir Hasan',
       phone: '+8801722222222',
-      identityNumber: 'PP-BD-0099231',
+      identityNumber: 'BM0099231',
       identityType: IdentityType.PASSPORT,
       dob: new Date('1986-11-03'),
       familyMembers: 5,
@@ -99,7 +99,7 @@ async function main() {
     {
       fullName: 'Nusrat Jahan',
       phone: '+8801733333333',
-      identityNumber: 'BC-2001-778812',
+      identityNumber: '20010725778812901',
       identityType: IdentityType.BIRTH_CERTIFICATE,
       dob: new Date('2001-07-25'),
       familyMembers: 2,
@@ -117,7 +117,7 @@ async function main() {
       // Pending-approval tenant so the admin approval queue is not empty.
       fullName: 'Imran Kabir',
       phone: '+8801744444444',
-      identityNumber: 'NID-1995-334455',
+      identityNumber: '1995010900334',
       identityType: IdentityType.NID,
       dob: new Date('1995-01-09'),
       familyMembers: 1,

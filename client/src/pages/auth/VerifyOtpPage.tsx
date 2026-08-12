@@ -2,13 +2,13 @@ import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { MessageCircle, Smartphone } from 'lucide-react';
+import { MessageCircle, MessageSquare, Smartphone } from 'lucide-react';
 import { AuthShell } from './AuthShell';
 import { Button } from '@/components/ui/button';
 import { Field, Input } from '@/components/ui/form-controls';
 import { Alert } from '@/components/ui/feedback';
 import { OtpValues, otpSchema } from '@/lib/schemas';
-import { authApi } from '@/services/endpoints';
+import { authApi, type OtpChannel } from '@/services/endpoints';
 import { errorMessage } from '@/services/api';
 import { toast } from '@/store/toast.store';
 
@@ -18,12 +18,19 @@ interface VerifyState {
   expiresInSeconds?: number;
 }
 
+/** SMS goes out over Twilio; the other two ride the free messaging providers. */
+const CHANNELS: { value: OtpChannel; label: string; icon: typeof MessageCircle }[] = [
+  { value: 'WHATSAPP', label: 'WhatsApp', icon: MessageCircle },
+  { value: 'IMO', label: 'IMO', icon: Smartphone },
+  { value: 'SMS', label: 'SMS', icon: MessageSquare },
+];
+
 export default function VerifyOtpPage() {
   const navigate = useNavigate();
   const state = (useLocation().state ?? {}) as VerifyState;
 
   const [phone] = useState(state.phone ?? '');
-  const [channel, setChannel] = useState<'WHATSAPP' | 'IMO'>('WHATSAPP');
+  const [channel, setChannel] = useState<OtpChannel>('WHATSAPP');
   const [devCode, setDevCode] = useState(state.devCode);
   const [secondsLeft, setSecondsLeft] = useState(state.expiresInSeconds ?? 0);
   const [formError, setFormError] = useState<string | null>(null);
@@ -77,7 +84,7 @@ export default function VerifyOtpPage() {
       const result = await authApi.sendOtp(phone, channel);
       setDevCode(result.devCode);
       setSecondsLeft(result.expiresInSeconds);
-      toast.success(`Code sent over ${channel === 'IMO' ? 'IMO' : 'WhatsApp'}`);
+      toast.success(`Code sent over ${CHANNELS.find((c) => c.value === channel)!.label}`);
     } catch (error) {
       setFormError(errorMessage(error, 'Could not resend the code'));
     } finally {
@@ -134,26 +141,23 @@ export default function VerifyOtpPage() {
 
       <div className="mt-6 space-y-3 border-t pt-5">
         <p className="text-sm font-medium">Didn’t get the code? Resend over:</p>
-        <div className="grid grid-cols-2 gap-2">
-          {(['WHATSAPP', 'IMO'] as const).map((option) => {
-            const Icon = option === 'WHATSAPP' ? MessageCircle : Smartphone;
-            return (
-              <button
-                key={option}
-                type="button"
-                onClick={() => setChannel(option)}
-                aria-pressed={channel === option}
-                className={`flex items-center justify-center gap-2 rounded-md border px-3 py-2.5 text-sm font-medium transition-colors ${
-                  channel === option
-                    ? 'border-primary bg-primary/10 text-primary'
-                    : 'text-muted-foreground hover:bg-muted'
-                }`}
-              >
-                <Icon className="h-4 w-4" />
-                {option === 'WHATSAPP' ? 'WhatsApp' : 'IMO'}
-              </button>
-            );
-          })}
+        <div className="grid grid-cols-3 gap-2">
+          {CHANNELS.map(({ value, label, icon: Icon }) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setChannel(value)}
+              aria-pressed={channel === value}
+              className={`flex items-center justify-center gap-2 rounded-md border px-3 py-2.5 text-sm font-medium transition-colors ${
+                channel === value
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'text-muted-foreground hover:bg-muted'
+              }`}
+            >
+              <Icon className="h-4 w-4" />
+              {label}
+            </button>
+          ))}
         </div>
         <Button variant="outline" className="w-full" onClick={resend} loading={resending}>
           Resend code

@@ -59,12 +59,26 @@ export const env = {
       | 'console'
       | 'ultramsg'
       | 'greenapi'
-      | 'webhook',
+      | 'webhook'
+      | 'twilio',
     ultramsgInstanceId: process.env.ULTRAMSG_INSTANCE_ID ?? '',
     ultramsgToken: process.env.ULTRAMSG_TOKEN ?? '',
     greenApiInstanceId: process.env.GREEN_API_INSTANCE_ID ?? '',
     greenApiToken: process.env.GREEN_API_TOKEN ?? '',
     webhookUrl: process.env.MESSAGING_WEBHOOK_URL ?? '',
+
+    /// SMS is routed separately from WhatsApp/IMO: it defaults to Twilio when
+    /// credentials are present and silently degrades to the console provider
+    /// otherwise, so local dev and CI never need a paid gateway.
+    twilio: {
+      accountSid: process.env.TWILIO_ACCOUNT_SID ?? '',
+      authToken: process.env.TWILIO_AUTH_TOKEN ?? '',
+      /// Either a purchased number (`from`) or a Messaging Service SID. The
+      /// service SID wins when both are set — it is what Twilio recommends for
+      /// deliverability across countries.
+      from: process.env.TWILIO_FROM_NUMBER ?? '',
+      messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID ?? '',
+    },
   },
 
   uploads: {

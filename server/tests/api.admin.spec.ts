@@ -212,8 +212,29 @@ describe('dynamic schema management (SRS 3.2.1 / 6.2)', () => {
   });
 });
 
-describe('tenant approval centre (SRS 3.2.2)', () => {
+describe('user approval centre (SRS 3.2.2)', () => {
   it('lists pending registrations and approves one', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+    const pending = await createUser({ isApproved: false } as never);
+
+    const queue = await request(app)
+      .get('/api/v1/admin/users?status=pending')
+      .set('Authorization', bearer(admin))
+      .expect(200);
+    expect(queue.body.data.users.map((t: { id: string }) => t.id)).toContain(pending.id);
+
+    await request(app)
+      .patch(`/api/v1/admin/users/${pending.id}/approval`)
+      .set('Authorization', bearer(admin))
+      .send({ approved: true })
+      .expect(200);
+
+    const fresh = await prisma.user.findUnique({ where: { id: pending.id } });
+    expect(fresh!.isApproved).toBe(true);
+  });
+
+  it('keeps serving the legacy /tenants alias', async () => {
     if (!dbUp) return;
     const admin = await createAdmin();
     const pending = await createUser({ isApproved: false } as never);
@@ -222,16 +243,164 @@ describe('tenant approval centre (SRS 3.2.2)', () => {
       .get('/api/v1/admin/tenants?status=pending')
       .set('Authorization', bearer(admin))
       .expect(200);
+
     expect(queue.body.data.tenants.map((t: { id: string }) => t.id)).toContain(pending.id);
+  });
+
+  it('creates, edits and deletes a user', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+    const stamp = Date.now();
+
+    const created = await request(app)
+      .post('/api/v1/admin/users')
+      .set('Authorization', bearer(admin))
+      .send({
+        fullName: 'Ayesha Siddika',
+        phone: '01799000111',
+        password: 'Str0ngPass1',
+        familyMembers: 3,
+        identityType: 'NID',
+        identityNumber: String(stamp).padStart(13, '9').slice(-13),
+        village: 'Mirpur DOHS',
+        postOffice: 'Mirpur',
+        district: 'Dhaka',
+        policeStation: 'Pallabi',
+        division: 'Dhaka',
+      })
+      .expect(201);
+
+    const id = created.body.data.id as string;
+    expect(created.body.data.phone).toBe('+8801799000111');
+    expect(created.body.data.passwordHash).toBeUndefined();
+
+    const edited = await request(app)
+      .patch(`/api/v1/admin/users/${id}`)
+      .set('Authorization', bearer(admin))
+      .send({ fullName: 'Ayesha S. Rahman', familyMembers: 4 })
+      .expect(200);
+    expect(edited.body.data.fullName).toBe('Ayesha S. Rahman');
+    expect(edited.body.data.familyMembers).toBe(4);
 
     await request(app)
-      .patch(`/api/v1/admin/tenants/${pending.id}/approval`)
+      .delete(`/api/v1/admin/users/${id}`)
       .set('Authorization', bearer(admin))
-      .send({ approved: true })
       .expect(200);
 
-    const fresh = await prisma.user.findUnique({ where: { id: pending.id } });
-    expect(fresh!.isApproved).toBe(true);
+    expect(await prisma.user.findUnique({ where: { id } })).toBeNull();
+  });
+
+  it('rejects an identity number that does not match its document type', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+
+    const base = {
+      fullName: 'Ayesha Siddika',
+      password: 'Str0ngPass1',
+      familyMembers: 1,
+      village: 'Mirpur DOHS',
+      postOffice: 'Mirpur',
+      district: 'Dhaka',
+      policeStation: 'Pallabi',
+      division: 'Dhaka',
+    };
+
+    // A 13-digit NID is not a valid 9-character passport number.
+    const mismatch = await request(app)
+      .post('/api/v1/admin/users')
+      .set('Authorization', bearer(admin))
+      .send({ ...base, phone: '01799000222', identityType: 'PASSPORT', identityNumber: '1990021800111' })
+      .expect(400);
+    expect(JSON.stringify(mismatch.body.error)).toMatch(/exactly 9/i);
+
+    // The same number is fine once the type agrees with it.
+    await request(app)
+      .post('/api/v1/admin/users')
+      .set('Authorization', bearer(admin))
+      .send({ ...base, phone: '01799000222', identityType: 'NID', identityNumber: '1990021800111' })
+      .expect(201);
+  });
+
+  it('re-checks the identity pair when only one half is patched', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+    const user = await createUser({ identityType: 'NID', identityNumber: '1990021800999' } as never);
+
+    // Switching the type alone would leave a 13-digit number on a passport.
+    await request(app)
+      .patch(`/api/v1/admin/users/${user.id}`)
+      .set('Authorization', bearer(admin))
+      .send({ identityType: 'PASSPORT' })
+      .expect(400);
+
+    // Changing both together is accepted, and the number is normalised.
+    const ok = await request(app)
+      .patch(`/api/v1/admin/users/${user.id}`)
+      .set('Authorization', bearer(admin))
+      .send({ identityType: 'PASSPORT', identityNumber: 'bm 0099-231' })
+      .expect(200);
+    expect(ok.body.data.identityNumber).toBe('BM0099231');
+  });
+
+  it('guards the identity pair through the raw record editor too', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+    const user = await createUser({ identityType: 'NID', identityNumber: '1990021800888' } as never);
+
+    await request(app)
+      .patch(`/api/v1/admin/tables/User/records/${user.id}`)
+      .set('Authorization', bearer(admin))
+      .send({ identityNumber: '123' })
+      .expect(400);
+
+    await request(app)
+      .patch(`/api/v1/admin/tables/User/records/${user.id}`)
+      .set('Authorization', bearer(admin))
+      .send({ identityNumber: '1990021800777' })
+      .expect(200);
+  });
+
+  it('refuses to create a user on a phone number already in use', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+    const existing = await createUser();
+
+    await request(app)
+      .post('/api/v1/admin/users')
+      .set('Authorization', bearer(admin))
+      .send({
+        fullName: 'Duplicate Person',
+        phone: existing.phone,
+        password: 'Str0ngPass1',
+        familyMembers: 1,
+        identityType: 'NID',
+        identityNumber: String(Date.now()).padStart(13, '8').slice(-13),
+        village: 'V',
+        postOffice: 'P',
+        district: 'Dhaka',
+        policeStation: 'T',
+        division: 'Dhaka',
+      })
+      .expect(409);
+  });
+
+  it('will not delete or demote the last remaining admin', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+    const other = await createAdmin();
+
+    // Two admins exist, so demoting one is allowed.
+    await request(app)
+      .patch(`/api/v1/admin/users/${other.id}`)
+      .set('Authorization', bearer(admin))
+      .send({ role: 'TENANT' })
+      .expect(200);
+
+    // Now `admin` is the only one left — and cannot remove themselves either.
+    await request(app)
+      .delete(`/api/v1/admin/users/${admin.id}`)
+      .set('Authorization', bearer(admin))
+      .expect(400);
   });
 
   it('assigns a flat and marks it occupied', async () => {
@@ -256,6 +425,93 @@ describe('tenant approval centre (SRS 3.2.2)', () => {
       .set('Authorization', bearer(admin))
       .send({ userId: other.id, flatId: flat.id })
       .expect(409);
+  });
+
+  it('assigns one user per flat from the flat endpoint and rejects duplicates', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+    const first = await createUser();
+    const second = await createUser();
+    const flatA = await createFlat(19000);
+    const flatB = await createFlat(21000);
+
+    await request(app)
+      .post(`/api/v1/admin/flats/${flatA.id}/tenancy`)
+      .set('Authorization', bearer(admin))
+      .send({ userId: first.id, advanceDeposit: 38000 })
+      .expect(201);
+
+    expect((await prisma.flat.findUnique({ where: { id: flatA.id } }))!.isOccupied).toBe(true);
+
+    // A second user cannot move into an occupied flat…
+    const occupied = await request(app)
+      .post(`/api/v1/admin/flats/${flatA.id}/tenancy`)
+      .set('Authorization', bearer(admin))
+      .send({ userId: second.id })
+      .expect(409);
+    expect(occupied.body.error.message).toMatch(/already assigned to/i);
+
+    // …and an already-housed user cannot take a second flat.
+    const doubleBooked = await request(app)
+      .post(`/api/v1/admin/flats/${flatB.id}/tenancy`)
+      .set('Authorization', bearer(admin))
+      .send({ userId: first.id })
+      .expect(409);
+    expect(doubleBooked.body.error.message).toMatch(/already assigned to flat/i);
+
+    expect(await prisma.tenancy.count({ where: { flatId: flatB.id } })).toBe(0);
+  });
+
+  it('releases a flat and lets it be reassigned to the same user later', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+    const tenant = await createUser();
+    const flat = await createFlat();
+
+    await request(app)
+      .post(`/api/v1/admin/flats/${flat.id}/tenancy`)
+      .set('Authorization', bearer(admin))
+      .send({ userId: tenant.id })
+      .expect(201);
+
+    await request(app)
+      .delete(`/api/v1/admin/flats/${flat.id}/tenancy`)
+      .set('Authorization', bearer(admin))
+      .expect(200);
+
+    expect((await prisma.flat.findUnique({ where: { id: flat.id } }))!.isOccupied).toBe(false);
+
+    // The ended tenancy occupies the unique userId slot; reassigning reuses it.
+    await request(app)
+      .post(`/api/v1/admin/flats/${flat.id}/tenancy`)
+      .set('Authorization', bearer(admin))
+      .send({ userId: tenant.id })
+      .expect(201);
+
+    expect(await prisma.tenancy.count({ where: { userId: tenant.id } })).toBe(1);
+    expect((await prisma.flat.findUnique({ where: { id: flat.id } }))!.isOccupied).toBe(true);
+  });
+
+  it('refuses to mark an occupied flat vacant by hand', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+    const tenant = await createUser();
+    const flat = await createFlat();
+    await createTenancy(tenant.id, flat.id);
+
+    await request(app)
+      .patch(`/api/v1/admin/flats/${flat.id}`)
+      .set('Authorization', bearer(admin))
+      .send({ isOccupied: false })
+      .expect(409);
+
+    // A normal field edit on the same flat still goes through.
+    const renamed = await request(app)
+      .patch(`/api/v1/admin/flats/${flat.id}`)
+      .set('Authorization', bearer(admin))
+      .send({ baseRent: 24000 })
+      .expect(200);
+    expect(renamed.body.data.baseRent).toBe(24000);
   });
 
   it('frees the flat when a tenancy ends', async () => {

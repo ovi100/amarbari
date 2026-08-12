@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Role } from '@prisma/client';
+import { Prisma, Role } from '@prisma/client';
 import prisma from '../utils/prisma';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -8,7 +8,12 @@ import {
   renderInvoiceJpg,
   renderInvoicePdf,
 } from '../services/document.service';
-import { generateInvoice, outstandingOf, recordPayment } from '../services/rent.service';
+import {
+  generateInvoice,
+  outstandingOf,
+  recordPayment,
+  updateInvoice,
+} from '../services/rent.service';
 
 /** A tenant may only read invoices belonging to the flat they currently occupy. */
 async function assertInvoiceAccess(req: Request, invoiceId: string) {
@@ -24,11 +29,22 @@ async function assertInvoiceAccess(req: Request, invoiceId: string) {
   }
 }
 
+/** Full detail for the invoice modal: line items plus who the flat belongs to. */
 export const getInvoice = asyncHandler(async (req: Request, res: Response) => {
   await assertInvoiceAccess(req, req.params.id);
   const invoice = await prisma.invoice.findUnique({
     where: { id: req.params.id },
-    include: { flat: true },
+    include: {
+      flat: {
+        include: {
+          tenancies: {
+            where: { isActive: true },
+            take: 1,
+            include: { user: { select: { id: true, fullName: true, phone: true } } },
+          },
+        },
+      },
+    },
   });
   if (!invoice) throw ApiError.notFound('Invoice not found');
   res.json({ success: true, data: { ...invoice, outstanding: outstandingOf(invoice) } });
@@ -64,11 +80,47 @@ export const downloadJpg = asyncHandler(async (req: Request, res: Response) => {
 
 // --- Admin -----------------------------------------------------------------
 
+const INVOICE_SORT_FIELDS = new Set([
+  'month',
+  'year',
+  'totalAmount',
+  'paidAmount',
+  'dueDate',
+  'paymentStatus',
+  'createdAt',
+]);
+
 export const listInvoices = asyncHandler(async (req: Request, res: Response) => {
-  const { page, pageSize } = req.query as unknown as { page: number; pageSize: number };
+  const { page, pageSize, search, sortBy, sortDir } = req.query as unknown as {
+    page: number;
+    pageSize: number;
+    search?: string;
+    sortBy?: string;
+    sortDir: 'asc' | 'desc';
+  };
+
+  // Invoices carry no text of their own, so a search resolves against the flat
+  // it was issued for and the user living there.
+  const where: Prisma.InvoiceWhereInput = search
+    ? {
+        OR: [
+          { flat: { flatNumber: { contains: search, mode: 'insensitive' } } },
+          { flat: { building: { contains: search, mode: 'insensitive' } } },
+          {
+            flat: {
+              tenancies: {
+                some: { isActive: true, user: { fullName: { contains: search, mode: 'insensitive' } } },
+              },
+            },
+          },
+        ],
+      }
+    : {};
+
   const [total, invoices] = await Promise.all([
-    prisma.invoice.count(),
+    prisma.invoice.count({ where }),
     prisma.invoice.findMany({
+      where,
       include: {
         flat: {
           select: {
@@ -82,7 +134,10 @@ export const listInvoices = asyncHandler(async (req: Request, res: Response) => 
           },
         },
       },
-      orderBy: [{ year: 'desc' }, { month: 'desc' }, { createdAt: 'desc' }],
+      orderBy:
+        sortBy && INVOICE_SORT_FIELDS.has(sortBy)
+          ? { [sortBy]: sortDir }
+          : [{ year: 'desc' }, { month: 'desc' }, { createdAt: 'desc' }],
       skip: (page - 1) * pageSize,
       take: pageSize,
     }),
@@ -100,6 +155,11 @@ export const listInvoices = asyncHandler(async (req: Request, res: Response) => 
 export const createInvoice = asyncHandler(async (req: Request, res: Response) => {
   const invoice = await generateInvoice(req.body);
   res.status(201).json({ success: true, data: invoice });
+});
+
+export const editInvoice = asyncHandler(async (req: Request, res: Response) => {
+  const invoice = await updateInvoice(req.params.id, req.body);
+  res.json({ success: true, data: { ...invoice, outstanding: outstandingOf(invoice) } });
 });
 
 export const payInvoice = asyncHandler(async (req: Request, res: Response) => {

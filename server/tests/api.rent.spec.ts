@@ -194,7 +194,9 @@ describe('rent deferral end-to-end (SRS 8.1 / QA 7.2)', () => {
   it('rejects a duplicate invoice for the same flat and month', async () => {
     if (!dbUp) return;
     const admin = await createAdmin();
+    const tenant = await createUser();
     const flat = await createFlat(15000);
+    await createTenancy(tenant.id, flat.id);
 
     await request(app)
       .post('/api/v1/invoices')
@@ -207,6 +209,45 @@ describe('rent deferral end-to-end (SRS 8.1 / QA 7.2)', () => {
       .set('Authorization', bearer(admin))
       .send({ flatId: flat.id, month: 4, year: 2026 })
       .expect(409);
+  });
+
+  it('refuses to invoice a flat with no user assigned', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+    const vacant = await createFlat(15000);
+
+    const res = await request(app)
+      .post('/api/v1/invoices')
+      .set('Authorization', bearer(admin))
+      .send({ flatId: vacant.id, month: 4, year: 2026 })
+      .expect(400);
+
+    expect(res.body.error.message).toMatch(/no user assigned/i);
+    expect(await prisma.invoice.count({ where: { flatId: vacant.id } })).toBe(0);
+  });
+
+  it('recalculates the total and status when an invoice is edited', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+    const { invoice } = await scenario({ total: 600 });
+
+    await request(app)
+      .post(`/api/v1/invoices/${invoice.id}/payments`)
+      .set('Authorization', bearer(admin))
+      .send({ amount: 600 })
+      .expect(200);
+
+    // Adding a line item to a settled invoice re-opens it as PARTIAL.
+    const edited = await request(app)
+      .patch(`/api/v1/invoices/${invoice.id}`)
+      .set('Authorization', bearer(admin))
+      .send({ electricityBill: 400 })
+      .expect(200);
+
+    expect(edited.body.data.totalAmount).toBe(1000);
+    expect(edited.body.data.paymentStatus).toBe('PARTIAL');
+    expect(edited.body.data.outstanding).toBe(400);
+    expect(edited.body.data.paidAt).toBeNull();
   });
 
   it('marks an invoice PAID once payments cover the total', async () => {

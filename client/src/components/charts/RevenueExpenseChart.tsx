@@ -9,9 +9,8 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { BarChart3, Table2 } from 'lucide-react';
 import { formatCompact, formatMoney } from '@/lib/utils';
-import { Button } from '@/components/ui/button';
+import { ChartViewToggle, type ChartView } from '@/components/charts/ChartViewToggle';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import type { MonthlyPoint } from '@/types';
 
@@ -84,28 +83,13 @@ function Legend() {
 }
 
 export function RevenueExpenseChart({ series }: { series: MonthlyPoint[] }) {
-  const [view, setView] = useState<'chart' | 'table'>('chart');
+  const [view, setView] = useState<ChartView>('chart');
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Legend />
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setView(view === 'chart' ? 'table' : 'chart')}
-          aria-pressed={view === 'table'}
-        >
-          {view === 'chart' ? (
-            <>
-              <Table2 className="h-3.5 w-3.5" /> Table view
-            </>
-          ) : (
-            <>
-              <BarChart3 className="h-3.5 w-3.5" /> Chart view
-            </>
-          )}
-        </Button>
+        <ChartViewToggle value={view} onChange={setView} label="Revenue vs expenses view" />
       </div>
 
       {view === 'chart' ? (

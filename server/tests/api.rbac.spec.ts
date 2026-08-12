@@ -24,6 +24,8 @@ const ADMIN_ROUTES: [string, string][] = [
   ['get', '/api/v1/admin/tables/User'],
   ['post', '/api/v1/admin/tables/User/columns'],
   ['get', '/api/v1/admin/tenants'],
+  ['get', '/api/v1/admin/users'],
+  ['post', '/api/v1/admin/users'],
   ['get', '/api/v1/admin/flats'],
   ['post', '/api/v1/admin/flats'],
   ['get', '/api/v1/admin/expenses'],

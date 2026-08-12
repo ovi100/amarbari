@@ -14,7 +14,7 @@ import { PageHeader, StatCard } from '@/components/StatCard';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Alert, LoadingState } from '@/components/ui/feedback';
-import { Input, Label } from '@/components/ui/form-controls';
+import { DateRangePicker, defaultRange, type DateRange } from '@/components/ui/date-range-picker';
 import { RevenueExpenseChart } from '@/components/charts/RevenueExpenseChart';
 import { ExpenseCategoryChart } from '@/components/charts/ExpenseCategoryChart';
 import { adminApi } from '@/services/endpoints';
@@ -22,12 +22,10 @@ import { errorMessage } from '@/services/api';
 import { formatMoney } from '@/lib/utils';
 import { toast } from '@/store/toast.store';
 
-const currentYear = new Date().getFullYear();
-
 export default function AdminDashboard() {
-  const [from, setFrom] = useState(`${currentYear}-01-01`);
-  const [to, setTo] = useState(`${currentYear}-12-31`);
+  const [range, setRange] = useState<DateRange>(defaultRange);
   const [exporting, setExporting] = useState<'csv' | 'xlsx' | null>(null);
+  const { from, to } = range;
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['admin', 'analytics', from, to],
@@ -63,49 +61,7 @@ export default function AdminDashboard() {
         }
       />
 
-      {/* Filters sit in one row above the charts. */}
-      <div className="mb-6 flex flex-wrap items-end gap-3 rounded-lg border bg-card p-4">
-        <div className="space-y-1.5">
-          <Label htmlFor="from">From</Label>
-          <Input
-            id="from"
-            type="date"
-            value={from}
-            max={to}
-            onChange={(e) => setFrom(e.target.value)}
-            className="w-auto"
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="to">To</Label>
-          <Input
-            id="to"
-            type="date"
-            value={to}
-            min={from}
-            onChange={(e) => setTo(e.target.value)}
-            className="w-auto"
-          />
-        </div>
-        <div className="flex gap-2">
-          {[
-            { label: 'This year', from: `${currentYear}-01-01`, to: `${currentYear}-12-31` },
-            { label: 'Last year', from: `${currentYear - 1}-01-01`, to: `${currentYear - 1}-12-31` },
-          ].map((preset) => (
-            <Button
-              key={preset.label}
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setFrom(preset.from);
-                setTo(preset.to);
-              }}
-            >
-              {preset.label}
-            </Button>
-          ))}
-        </div>
-      </div>
+      <DateRangePicker value={range} onChange={setRange} className="mb-6" />
 
       {isLoading ? (
         <LoadingState label="Crunching the numbers…" />
@@ -156,7 +112,7 @@ export default function AdminDashboard() {
             <StatCard
               label="Pending approvals"
               value={String(data!.counts.pendingApprovals)}
-              hint={`${data!.counts.tenants} tenants in total`}
+              hint={`${data!.counts.tenants} users in total`}
               icon={UserCheck}
               tone={data!.counts.pendingApprovals > 0 ? 'warning' : 'default'}
             />
@@ -195,7 +151,7 @@ export default function AdminDashboard() {
 
           <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {[
-              { to: '/admin/tenants', label: 'Review tenants', icon: UserCheck },
+              { to: '/admin/users', label: 'Review users', icon: UserCheck },
               { to: '/admin/invoices', label: 'Issue invoices', icon: Wallet },
               { to: '/admin/tickets', label: 'Resolve tickets', icon: Wrench },
               { to: '/admin/data', label: 'Data control', icon: Building2 },

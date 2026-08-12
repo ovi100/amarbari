@@ -14,7 +14,7 @@ const validRegistration = {
   dob: '1990-02-18',
   familyMembers: 3,
   identityType: 'NID',
-  identityNumber: 'NID-1990-000111',
+  identityNumber: '1990000111234',
   village: 'Mirpur DOHS Road 5',
   postOffice: 'Mirpur',
   district: 'Dhaka',
@@ -91,7 +91,7 @@ describe('auth & OTP flow (SRS 6.1)', () => {
     await request(app).post('/api/v1/auth/register').send(validRegistration).expect(201);
     const dupe = await request(app)
       .post('/api/v1/auth/register')
-      .send({ ...validRegistration, identityNumber: 'NID-OTHER-1' })
+      .send({ ...validRegistration, identityNumber: '1990000111299' })
       .expect(409);
     expect(dupe.body.error.message).toMatch(/phone number already exists/i);
   });
@@ -136,7 +136,7 @@ describe('auth & OTP flow (SRS 6.1)', () => {
     await request(app).post('/api/v1/auth/register').send(validRegistration).expect(201);
     await request(app)
       .post('/api/v1/auth/register')
-      .send({ ...validRegistration, phone: '+8801711111111', identityNumber: 'NID-OTHER-2' })
+      .send({ ...validRegistration, phone: '+8801711111111', identityNumber: '1990000111288' })
       .expect(409);
   });
 

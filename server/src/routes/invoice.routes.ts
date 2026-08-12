@@ -6,8 +6,9 @@ import { validate } from '../middlewares/validate';
 import {
   generateInvoiceSchema,
   idParamSchema,
-  paginationSchema,
+  listQuerySchema,
   recordPaymentSchema,
+  updateInvoiceSchema,
 } from '../utils/validators';
 
 const router = Router();
@@ -17,7 +18,7 @@ router.use(requireAuth);
 router.get(
   '/',
   requireRole(Role.ADMIN),
-  validate(paginationSchema, 'query'),
+  validate(listQuerySchema, 'query'),
   invoices.listInvoices
 );
 router.post(
@@ -25,6 +26,13 @@ router.post(
   requireRole(Role.ADMIN),
   validate(generateInvoiceSchema),
   invoices.createInvoice
+);
+router.patch(
+  '/:id',
+  requireRole(Role.ADMIN),
+  validate(idParamSchema, 'params'),
+  validate(updateInvoiceSchema),
+  invoices.editInvoice
 );
 router.post(
   '/:id/payments',

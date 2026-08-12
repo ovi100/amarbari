@@ -286,6 +286,14 @@ export async function generateInvoice(input: GenerateInvoiceInput) {
     });
     if (!flat) throw ApiError.notFound('Flat not found');
 
+    // A bill needs somebody to bill. Invoicing a vacant unit produces a
+    // receivable nobody owes and skews every revenue figure downstream.
+    if (flat.tenancies.length === 0) {
+      throw ApiError.badRequest(
+        `Flat ${flat.flatNumber} has no user assigned — allocate a tenant before invoicing it`
+      );
+    }
+
     const existing = await tx.invoice.findUnique({
       where: { flatId_month_year: { flatId: input.flatId, month: input.month, year: input.year } },
     });
@@ -330,6 +338,60 @@ export async function generateInvoice(input: GenerateInvoiceInput) {
     }
 
     return invoice;
+  });
+}
+
+export interface UpdateInvoiceInput {
+  flatRent?: number;
+  electricityBill?: number;
+  waterBill?: number;
+  internetBill?: number;
+  utilityBill?: number;
+  previousDue?: number;
+  dueDate?: Date;
+  paymentStatus?: PaymentStatus;
+}
+
+/**
+ * Admin edits an issued invoice. The total is always recomputed from the line
+ * items rather than trusted from the client, and the payment status is
+ * re-derived from what has actually been settled unless it is set explicitly.
+ */
+export async function updateInvoice(invoiceId: string, input: UpdateInvoiceInput) {
+  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
+  if (!invoice) throw ApiError.notFound('Invoice not found');
+
+  const lines = {
+    flatRent: money(input.flatRent ?? invoice.flatRent),
+    electricityBill: money(input.electricityBill ?? invoice.electricityBill),
+    waterBill: money(input.waterBill ?? invoice.waterBill),
+    internetBill: money(input.internetBill ?? invoice.internetBill),
+    utilityBill: money(input.utilityBill ?? invoice.utilityBill),
+    previousDue: money(input.previousDue ?? invoice.previousDue),
+  };
+
+  const totalAmount = money(Object.values(lines).reduce((sum, value) => sum + value, 0));
+  const settled = money(invoice.paidAmount + invoice.advanceDeducted);
+
+  const paymentStatus =
+    input.paymentStatus ??
+    (settled >= totalAmount && settled > 0
+      ? PaymentStatus.PAID
+      : settled > 0
+        ? PaymentStatus.PARTIAL
+        : PaymentStatus.DUE);
+
+  return prisma.invoice.update({
+    where: { id: invoiceId },
+    data: {
+      ...lines,
+      totalAmount,
+      paymentStatus,
+      ...(input.dueDate ? { dueDate: input.dueDate } : {}),
+      // Re-opening a settled invoice must clear the settlement timestamp.
+      paidAt: paymentStatus === PaymentStatus.PAID ? (invoice.paidAt ?? new Date()) : null,
+    },
+    include: { flat: true },
   });
 }
 

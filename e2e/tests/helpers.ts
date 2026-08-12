@@ -49,6 +49,7 @@ export function uniquePhone() {
   return `019${tail}`;
 }
 
+/** A valid 13-digit NID that will not collide with seeded or previous-run data. */
 export function uniqueIdentity() {
-  return `NID-E2E-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  return `${String(Date.now()).slice(-9)}${String(Math.floor(Math.random() * 10_000)).padStart(4, '0')}`;
 }

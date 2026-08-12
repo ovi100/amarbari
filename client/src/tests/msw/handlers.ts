@@ -13,7 +13,7 @@ export const mockTenant: User = {
   dob: '1990-02-18T00:00:00.000Z',
   familyMembers: 3,
   identityType: 'NID',
-  identityNumber: 'NID-1990-000111',
+  identityNumber: '1990000111234',
   village: 'Mirpur DOHS Road 5',
   postOffice: 'Mirpur',
   district: 'Dhaka',

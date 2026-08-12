@@ -1,7 +1,8 @@
 import bcrypt from 'bcryptjs';
-import { DynamicColumnType, Prisma } from '@prisma/client';
+import { DynamicColumnType, IdentityType, Prisma } from '@prisma/client';
 import prisma from '../utils/prisma';
 import { ApiError } from '../utils/ApiError';
+import { identityNumberError, normaliseIdentityNumber } from '../utils/validators';
 
 /**
  * Admin Data Control (SRS 3.2.1).
@@ -398,6 +399,17 @@ export async function updateRecord(
 
   if (touchedCustom) data.customFields = customFields;
   if (Object.keys(data).length === 0) throw ApiError.badRequest('No updatable fields supplied');
+
+  // The generic editor is a back door into the same columns the user form
+  // guards, so the identity pairing is re-checked here too. The half that is
+  // not being edited comes from the stored record.
+  if (table === 'User' && (data.identityType || data.identityNumber)) {
+    const identityType = (data.identityType ?? existing.identityType) as IdentityType;
+    const identityNumber = String(data.identityNumber ?? existing.identityNumber);
+    const message = identityNumberError(identityType, identityNumber);
+    if (message) throw ApiError.badRequest(message);
+    if (data.identityNumber) data.identityNumber = normaliseIdentityNumber(identityNumber);
+  }
 
   const select = Object.fromEntries(native.map((c) => [c.name, true]));
   select.customFields = true;

@@ -5,17 +5,21 @@ import { requireAuth, requireRole } from '../middlewares/auth';
 import { validate } from '../middlewares/validate';
 import {
   addColumnSchema,
+  adminCreateUserSchema,
+  adminUpdateUserSchema,
   analyticsRangeSchema,
   approvalSchema,
+  assignFlatSchema,
   expenseSchema,
   exportQuerySchema,
   flatSchema,
   idParamSchema,
-  paginationSchema,
+  listQuerySchema,
   tableQuerySchema,
   tenancySchema,
   updateFlatSchema,
   updateTenancySchema,
+  userListQuerySchema,
 } from '../utils/validators';
 
 const router = Router();
@@ -23,16 +27,27 @@ const router = Router();
 // Every admin route is gated: authenticate, then hard-fail non-admins with 403.
 router.use(requireAuth, requireRole(Role.ADMIN));
 
-// --- Tenants ---------------------------------------------------------------
-router.get('/tenants', validate(paginationSchema.passthrough(), 'query'), admin.listTenants);
-router.get('/tenants/:id', validate(idParamSchema, 'params'), admin.getTenant);
-router.patch(
-  '/tenants/:id/approval',
-  validate(idParamSchema, 'params'),
-  validate(approvalSchema),
-  admin.setApproval
-);
-router.delete('/tenants/:id', validate(idParamSchema, 'params'), admin.deleteTenant);
+// --- Users -----------------------------------------------------------------
+// `/tenants` is kept as an alias so existing integrations keep working; the
+// product now calls these accounts "users".
+for (const base of ['/users', '/tenants']) {
+  router.get(base, validate(userListQuerySchema.passthrough(), 'query'), admin.listUsers);
+  router.post(base, validate(adminCreateUserSchema), admin.createUser);
+  router.get(`${base}/:id`, validate(idParamSchema, 'params'), admin.getUser);
+  router.patch(
+    `${base}/:id`,
+    validate(idParamSchema, 'params'),
+    validate(adminUpdateUserSchema),
+    admin.updateUser
+  );
+  router.patch(
+    `${base}/:id/approval`,
+    validate(idParamSchema, 'params'),
+    validate(approvalSchema),
+    admin.setApproval
+  );
+  router.delete(`${base}/:id`, validate(idParamSchema, 'params'), admin.deleteUser);
+}
 
 // --- Flats -----------------------------------------------------------------
 router.get('/flats', admin.listFlats);
@@ -43,6 +58,13 @@ router.patch(
   validate(updateFlatSchema),
   admin.updateFlat
 );
+router.post(
+  '/flats/:id/tenancy',
+  validate(idParamSchema, 'params'),
+  validate(assignFlatSchema),
+  admin.assignFlat
+);
+router.delete('/flats/:id/tenancy', validate(idParamSchema, 'params'), admin.releaseFlat);
 router.delete('/flats/:id', validate(idParamSchema, 'params'), admin.deleteFlat);
 
 // --- Tenancies -------------------------------------------------------------
@@ -55,8 +77,14 @@ router.patch(
 );
 
 // --- Expenses --------------------------------------------------------------
-router.get('/expenses', validate(paginationSchema, 'query'), admin.listExpenses);
+router.get('/expenses', validate(listQuerySchema, 'query'), admin.listExpenses);
 router.post('/expenses', validate(expenseSchema), admin.createExpense);
+router.patch(
+  '/expenses/:id',
+  validate(idParamSchema, 'params'),
+  validate(expenseSchema.partial()),
+  admin.updateExpense
+);
 router.delete('/expenses/:id', validate(idParamSchema, 'params'), admin.deleteExpense);
 
 // --- Analytics & export ----------------------------------------------------

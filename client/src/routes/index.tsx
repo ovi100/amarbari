@@ -19,7 +19,7 @@ const TenantChatPage = lazy(() => import('@/pages/tenant/TenantChatPage'));
 const ProfilePage = lazy(() => import('@/pages/tenant/ProfilePage'));
 
 const AdminDashboard = lazy(() => import('@/pages/admin/AdminDashboard'));
-const TenantsPage = lazy(() => import('@/pages/admin/TenantsPage'));
+const UsersPage = lazy(() => import('@/pages/admin/UsersPage'));
 const FlatsPage = lazy(() => import('@/pages/admin/FlatsPage'));
 const InvoicesPage = lazy(() => import('@/pages/admin/InvoicesPage'));
 const ExpensesPage = lazy(() => import('@/pages/admin/ExpensesPage'));
@@ -69,7 +69,9 @@ export function AppRoutes() {
           <Route element={<RequireRole role="ADMIN" />}>
             <Route path="/admin" element={<AppLayout variant="admin" />}>
               <Route index element={<AdminDashboard />} />
-              <Route path="tenants" element={<TenantsPage />} />
+              <Route path="users" element={<UsersPage />} />
+              {/* Bookmarks from before the rename still land in the right place. */}
+              <Route path="tenants" element={<Navigate to="/admin/users" replace />} />
               <Route path="flats" element={<FlatsPage />} />
               <Route path="invoices" element={<InvoicesPage />} />
               <Route path="expenses" element={<ExpensesPage />} />

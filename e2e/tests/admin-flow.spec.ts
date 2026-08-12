@@ -43,20 +43,25 @@ test.describe('Admin journey', () => {
     }
   });
 
-  test('reviews and approves a pending tenant', async ({ page }) => {
+  test('reviews and approves a pending user', async ({ page }) => {
     await loginAsAdmin(page);
-    await navigateTo(page, 'Tenants');
-    await expect(page).toHaveURL(/\/admin\/tenants/);
+    await navigateTo(page, 'Users');
+    await expect(page).toHaveURL(/\/admin\/users/);
 
     await page.getByRole('button', { name: /^pending$/i }).click();
 
-    const approve = page.getByRole('button', { name: /^Approve .+/ }).first();
-    test.skip((await approve.count()) === 0, 'No pending tenants left to approve');
-
     // Identity details are visible for verification before approving.
     await expect(page.getByText(/NID|Passport|Birth Certificate/).first()).toBeVisible();
+
+    // Row actions collapse into a menu once a row has more than two of them.
+    const menu = page.getByRole('button', { name: /row actions/i }).first();
+    test.skip((await menu.count()) === 0, 'No pending users left to approve');
+    await menu.click();
+
+    const approve = page.getByRole('menuitem', { name: /^approve$/i });
+    test.skip((await approve.count()) === 0, 'No pending users left to approve');
     await approve.click();
-    await expect(page.getByText(/tenant approved/i)).toBeVisible();
+    await expect(page.getByText(/user approved/i)).toBeVisible();
   });
 
   test('manages flats', async ({ page }) => {
@@ -99,11 +104,11 @@ test.describe('Admin journey', () => {
     await loginAsAdmin(page);
     await page.goto('/admin/invoices');
 
+    // Invoice rows carry five actions, so they live behind the row menu.
+    await page.getByRole('button', { name: /row actions/i }).first().click();
+
     const downloadPromise = page.waitForEvent('download');
-    await page
-      .getByRole('button', { name: /download pdf invoice/i })
-      .first()
-      .click();
+    await page.getByRole('menuitem', { name: /download pdf invoice/i }).click();
     const download = await downloadPromise;
 
     expect(download.suggestedFilename()).toMatch(/\.pdf$/);
