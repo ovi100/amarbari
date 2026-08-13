@@ -10,6 +10,7 @@ import {
   unitRef,
   unitRefOf,
 } from './unit.service';
+import { attachReadingsToInvoice, electricityFor } from './meter.service';
 
 export type DeferralMode = 'DEDUCT_FROM_ADVANCE' | 'ROLLOVER';
 
@@ -349,8 +350,17 @@ export async function generateInvoice(input: GenerateInvoiceInput) {
     const line = (name: string, value: number | undefined) =>
       applicable.has(name) ? money(value ?? 0) : 0;
 
+    // Electricity comes off the meters when the caller does not state it
+    // (SRS 8.11): Σ (current − previous) × perUnit across the unit's meters.
+    // An explicit figure still wins — the admin form sends the pre-filled
+    // value, and may override it before submitting.
+    const metered =
+      input.electricityBill === undefined
+        ? await electricityFor(category, unitId, input.month, input.year, tx)
+        : null;
+
     const flatRent = money(input.flatRent ?? described.baseRent);
-    const electricityBill = line('electricityBill', input.electricityBill);
+    const electricityBill = line('electricityBill', input.electricityBill ?? metered?.amount);
     const waterBill = line('waterBill', input.waterBill);
     const internetBill = line('internetBill', input.internetBill);
     const utilityBill = line('utilityBill', input.utilityBill);
@@ -389,6 +399,12 @@ export async function generateInvoice(input: GenerateInvoiceInput) {
     // The carried balance now lives on the invoice — reset the running ledger.
     if (tenancy && previousDue > 0) {
       await tx.tenancy.update({ where: { id: tenancy.id }, data: { accumulatedDue: 0 } });
+    }
+
+    // Stamp the month's readings with the invoice that billed them, so the
+    // meter report can point at the document a charge ended up on.
+    if (applicable.has('electricityBill')) {
+      await attachReadingsToInvoice(category, unitId, input.month, input.year, invoice.id, tx);
     }
 
     return invoice;

@@ -8,6 +8,7 @@ import { env } from './config/env';
 import routes from './routes';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 import { generalLimiter } from './middlewares/rateLimiter';
+import { auditRequests } from './middlewares/audit';
 import { ApiError } from './utils/ApiError';
 
 export function createApp() {
@@ -50,7 +51,9 @@ export function createApp() {
     express.static(env.uploads.dir, { maxAge: '7d', fallthrough: true })
   );
 
-  app.use('/api/v1', routes);
+  // Mounted ahead of the routes so every mutation is swept into the activity
+  // log; it only writes once the response has finished, and only on success.
+  app.use('/api/v1', auditRequests, routes);
 
   // Translate Multer's own errors into the standard envelope.
   app.use(

@@ -19,6 +19,9 @@ import {
 import { calculateTenancyDuration } from '../services/rent.service';
 import { identityNumberError } from '../utils/validators';
 import { describeUnit } from '../services/unit.service';
+import { assertMeterAvailable, assignMeter, metersForUnit } from '../services/meter.service';
+import { listActivity } from '../services/activity.service';
+import { forgetCachedActor } from '../middlewares/audit';
 import { emitToUser } from '../sockets';
 
 const tenantSelect = {
@@ -201,6 +204,10 @@ export const updateUser = asyncHandler(async (req: Request, res: Response) => {
     select: tenantSelect,
   });
 
+  // The audit trail caches actor names; a renamed account must not keep
+  // signing its next few log lines with the old one.
+  forgetCachedActor(existing.id);
+
   res.json({ success: true, data: user });
 });
 
@@ -265,6 +272,8 @@ export const deleteUser = asyncHandler(async (req: Request, res: Response) => {
     await tx.user.delete({ where: { id: user.id } });
   });
 
+  forgetCachedActor(user.id);
+
   res.json({ success: true, data: { deleted: req.params.id } });
 });
 
@@ -275,6 +284,9 @@ const flatWithTenant = {
     where: { isActive: true },
     include: { user: { select: { id: true, fullName: true, phone: true } } },
   },
+  // Meters ride along so the flats grid can show what is metered without a
+  // second round trip per row.
+  meters: { orderBy: { meterNumber: 'asc' } },
 } satisfies Prisma.FlatInclude;
 
 export const listFlats = asyncHandler(async (req: Request, res: Response) => {
@@ -297,8 +309,21 @@ export const listFlats = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const createFlat = asyncHandler(async (req: Request, res: Response) => {
-  const flat = await prisma.flat.create({ data: req.body, include: flatWithTenant });
-  res.status(201).json({ success: true, data: flat });
+  const { meterId, ...data } = req.body;
+
+  // A meter may be allocated as the unit is created (SRS 3.2.9 item 6). It goes
+  // through the same duplicate-assignment guard as the standalone route, and is
+  // checked *before* the flat is written so a taken meter cannot leave a
+  // half-finished unit behind.
+  if (meterId) await assertMeterAvailable(meterId);
+
+  const flat = await prisma.flat.create({ data, include: flatWithTenant });
+  if (meterId) await assignMeter(meterId, 'FLAT', flat.id);
+
+  res.status(201).json({
+    success: true,
+    data: { ...flat, meters: await metersForUnit('FLAT', flat.id) },
+  });
 });
 
 export const updateFlat = asyncHandler(async (req: Request, res: Response) => {
@@ -466,6 +491,7 @@ const shopWithTenant = {
     where: { isActive: true },
     include: { user: { select: { id: true, fullName: true, phone: true } } },
   },
+  meters: { orderBy: { meterNumber: 'asc' } },
 } satisfies Prisma.ShopInclude;
 
 export const listShops = asyncHandler(async (req: Request, res: Response) => {
@@ -493,8 +519,16 @@ export const listShops = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const createShop = asyncHandler(async (req: Request, res: Response) => {
-  const shop = await prisma.shop.create({ data: req.body, include: shopWithTenant });
-  res.status(201).json({ success: true, data: shop });
+  const { meterId, ...data } = req.body;
+  if (meterId) await assertMeterAvailable(meterId);
+
+  const shop = await prisma.shop.create({ data, include: shopWithTenant });
+  if (meterId) await assignMeter(meterId, 'SHOP', shop.id);
+
+  res.status(201).json({
+    success: true,
+    data: { ...shop, meters: await metersForUnit('SHOP', shop.id) },
+  });
 });
 
 export const updateShop = asyncHandler(async (req: Request, res: Response) => {
@@ -668,6 +702,26 @@ export const updateExpense = asyncHandler(async (req: Request, res: Response) =>
 export const deleteExpense = asyncHandler(async (req: Request, res: Response) => {
   await prisma.buildingExpense.delete({ where: { id: req.params.id } });
   res.json({ success: true, data: { deleted: req.params.id } });
+});
+
+// --- Activity log (SRS 3.2.10) ---------------------------------------------
+
+/**
+ * The audit trail, filterable down to one record — `?entity=Meter&entityId=…`
+ * is what the meter history dialog reads. Admin-only: it names who did what,
+ * and residents have no business reading each other's actions.
+ */
+export const listActivityLog = asyncHandler(async (req: Request, res: Response) => {
+  const query = req.query as unknown as {
+    page: number;
+    pageSize: number;
+    search?: string;
+    sortDir: 'asc' | 'desc';
+    entity?: string;
+    entityId?: string;
+    actorId?: string;
+  };
+  res.json({ success: true, data: await listActivity(query) });
 });
 
 // --- Analytics & export (SRS 3.2.3 / 3.2.4) --------------------------------

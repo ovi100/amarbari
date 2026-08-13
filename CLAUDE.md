@@ -125,6 +125,12 @@ the light palette on a dark surface, where they read as missing rather than mere
 8. **Invoice History Grid:**
    - The resident's own invoice history is paginated, searchable and sortable, and exports to CSV, using
      the same `DataTable` as the admin grids (§3.2.7).
+9. **Meter Readings:**
+   - A resident sees the meters on their own unit and files **this month's reading** — nothing else.
+     They cannot add, move, retire or re-rate a meter, and cannot back-fill an earlier month.
+   - The charge is previewed as the number is typed: `(reading − previous) × per-unit rate`.
+   - Correcting a reading already filed this month overwrites it, and the previous value goes to the
+     activity log (§3.2.10). Full model in **§8.11**.
 
 ### 3.2 Property Owner (Admin) Features
 
@@ -195,6 +201,24 @@ the light palette on a dark surface, where they read as missing rather than mere
      re-opening a settled invoice clears `paidAt`.
    - Generation is blocked for a flat with no user assigned (§8.2), and requires every charge to be
      stated explicitly (§8.4).
+
+9. **Electricity Meter Management:**
+   - Full meter CRUD, plus allocation to a **flat or a shop** — or to neither, while a meter waits in
+     the pool. A meter may also be allocated **as a unit is created**, from the flat/shop form.
+   - **No silent reassignment.** A meter already on a unit is refused, naming the unit it is on; the
+     admin releases it first. A dial that changes unit mid-cycle would bill one tenant for another's
+     consumption, so the release is the deliberate act that closes the old unit's readings.
+   - Readings can be filed or back-filled by an admin for any month, subject to the ordering rule in §8.11.
+   - **Per-meter consumption report**, monthly and year-by-year: units spent, the tariff applied, the
+     amount, and the closing dial reading. Months with no reading are shown as gaps rather than dropped.
+   - The **electricity line on an invoice is computed from the meters** (§8.11) and pre-filled on the
+     generate form, with the arithmetic stated under the field. It stays editable — a meter can be wrong.
+
+10. **Activity Log:**
+    - Every mutation, by an admin or a resident, is recorded: who, what, when, and — for meter readings —
+      the value before and after. Full model in **§8.12**.
+    - Read-only, filterable by record type, searchable and CSV-exportable through the shared `DataTable`.
+      Each meter's own slice is reachable from its row on the Meters page.
 
 ---
 
@@ -482,6 +506,90 @@ model ChatMessage {
   createdAt  DateTime @default(now())
 }
 
+/// An electricity meter (§8.11). Assignable to a flat *or* a shop, or to
+/// neither while it waits in the pool — `meter_at_most_one_unit` CHECK. That
+/// single FK pair *is* the duplicate-assignment guard.
+model Meter {
+  id     String  @id @default(uuid())
+  flatId String?
+  shopId String?
+  flat   Flat?   @relation(fields: [flatId], references: [id], onDelete: SetNull)
+  shop   Shop?   @relation(fields: [shopId], references: [id], onDelete: SetNull)
+
+  meterName   String
+  meterNumber String @unique
+
+  currentReading  Float @default(0)
+  previousReading Float @default(0)
+
+  /// Null = follow the category default (10 flat / 15 shop), re-read per
+  /// reading rather than frozen onto the row.
+  perUnitRate Float?
+  isActive    Boolean @default(true)
+
+  readings     MeterReading[]
+  customFields Json           @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// One row per meter per billing month — the evidence behind an electricity
+/// charge, and the source of the meter report. Corrections overwrite the row;
+/// the previous value goes to `ActivityLog`.
+model MeterReading {
+  id      String @id @default(uuid())
+  meterId String
+  meter   Meter  @relation(fields: [meterId], references: [id], onDelete: Cascade)
+
+  month Int
+  year  Int
+
+  previousReading Float
+  currentReading  Float
+  unitsConsumed   Float
+  perUnitRate     Float
+  amount          Float
+
+  /// Nulled if the account is deleted; the name is snapshotted, so billing
+  /// evidence outlives the account that filed it.
+  recordedById   String?
+  recordedBy     User?   @relation(fields: [recordedById], references: [id], onDelete: SetNull)
+  recordedByName String
+  recordedByRole Role    @default(USER)
+
+  invoiceId String?
+
+  @@unique([meterId, month, year])
+  @@index([year, month])
+}
+
+/// Append-only audit trail (§8.12). Deliberately **absent from
+/// `MANAGED_TABLES`**: a log the Data Control editor could rewrite would be
+/// evidence of nothing.
+model ActivityLog {
+  id String @id @default(uuid())
+
+  actorId   String?
+  actor     User?   @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  actorName String
+  actorRole Role    @default(USER)
+
+  action   String  // `meter.reading.correct`, or `POST /api/v1/admin/flats`
+  entity   String  // model name, e.g. `Meter`
+  entityId String?
+  summary  String
+
+  before Json?
+  after  Json?
+  ip     String?
+
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([createdAt])
+}
+
 /// Metadata registry backing SRS 3.2.1. Admin-created columns are stored as keys
 /// inside each model's `customFields` JSONB blob rather than as physical DDL
 /// columns, so extending the schema needs no migration and cannot corrupt the
@@ -553,6 +661,34 @@ Mirrors the flat routes; a shop is the other rent category (§8.9).
 - `DELETE /api/v1/admin/shops/:id/tenancy` — End the tenancy and release the shop.
 - `DELETE /api/v1/admin/shops/:id` — Delete; refused while a tenancy is active.
 
+### 6.1.4 Meters (Admin) & 6.1.5 Meters (Both Roles)
+
+Management is admin-only; filing a reading and reading the report are open to the resident who
+occupies the unit the meter is on. The ownership check is per record, so it lives in the controller
+rather than the route.
+
+- `GET /api/v1/admin/meters` — Shared query contract plus `status=assigned|unassigned` and
+  `category=FLAT|SHOP`. `?status=unassigned` is what the assign pickers list.
+- `POST /api/v1/admin/meters` — Create, optionally allocating in the same step (`category` + `unitId`).
+- `PATCH /api/v1/admin/meters/:id` — Edit name, number, readings, tariff, in-service flag.
+- `DELETE /api/v1/admin/meters/:id` — **409** while the meter is on a unit.
+- `POST /api/v1/admin/meters/:id/assign` — Allocate. **409** if already assigned, naming the unit.
+- `DELETE /api/v1/admin/meters/:id/assign` — Release back to the pool.
+- `GET /api/v1/admin/meters/summary` — Portfolio counts and the month's consumption.
+- `GET /api/v1/admin/meters/electricity?category&unitId&month&year` — What the electricity line comes
+  to, with its per-meter breakdown. The invoice form pre-fills from this.
+- `GET /api/v1/admin/activity` — The audit trail; shared query contract plus `entity`, `entityId`,
+  `actorId`. Admin-only — it names who did what.
+
+Open to both roles, mounted at `/api/v1/meters`:
+
+- `GET /api/v1/meters/my` — The signed-in resident's meters, each with this month's reading if filed.
+- `GET /api/v1/meters/:id` · `GET /api/v1/meters/:id/readings` · `GET /api/v1/meters/:id/report?year=`
+  — **403** for a meter on another unit.
+- `POST /api/v1/meters/:id/readings` — File a reading. **201** when new, **200** when it corrects the
+  month's existing row. A resident's month/year are forced to the current cycle; only an admin may
+  back-fill.
+
 ### 6.2 Dynamic Schema & Table Management (Admin)
 
 - `GET /api/v1/admin/tables` — Fetch database table metadata, dynamic schema definitions, and column schemas.
@@ -620,6 +756,9 @@ To guarantee end-to-end reliability, security, and smooth user experience across
    - `DataTable` behaviour: sort cycling, numeric vs. lexical ordering, local filtering, the database
      fallback firing only on a local miss, pagination boundaries, and the inline-vs-menu action
      threshold counted per row.
+   - Meter forms: a blank reading rejected while a stated `0` is accepted (§8.4 again), a current
+     reading below the previous one refused, a blank tariff meaning "category default", and the
+     resident's reading dialog previewing units × rate before submission.
    - Shared controls: `PasswordInput` masking/reveal and its tab behaviour; `DateRangePicker` presets
      driving both date fields.
    - Overview integration: both chart cards exposing the identical view switch, and switching to table
@@ -644,6 +783,15 @@ To guarantee end-to-end reliability, security, and smooth user experience across
      release-then-reassign reusing the existing tenancy row.
    - **Invoice rules:** vacant-flat generation refused and no row written; edit recalculating total,
      status and `paidAt`.
+   - **Meters (§8.11):** the duplicate-assignment refusal and that release-then-assign succeeds; the
+     other FK cleared when a meter moves category; delete refused while allocated; allocation from the
+     flat-create form; the flat/shop tariff defaults and a per-meter override; a resident filing on
+     their own meter but `403` on another's; a reading below the previous one refused; a same-month
+     correction re-basing to 150 rather than compounding, with the before/after in the log; a
+     correction to an already-superseded month refused; electricity summed across meters and billed
+     onto the invoice; and the monthly/yearly report including its empty months.
+   - **Activity log (§8.12):** domain entries carrying before/after; the middleware sweep firing
+     exactly once for an uninstrumented write; passwords redacted; and the endpoint being admin-only.
    - **Messaging:** Twilio request shape (basic auth, `From` vs. `MessagingServiceSid`), failure
      reported rather than thrown, and the console fallback when unconfigured.
    - **PDF/JPG Renderer:** Validate that server-rendered buffers output valid PDF/JPG buffers with signatures without memory leaks.
@@ -676,6 +824,13 @@ To guarantee end-to-end reliability, security, and smooth user experience across
 | **Shop Line Items**                 | Generate a shop invoice, posting a water charge alongside the service charge.                | The water charge is stored as 0 and excluded from the total; the form does not offer it in the first place.             |
 | **Mixed-Category Month**            | Invoice a flat and a shop for the same month, then repeat for the shop.                      | Both succeed; the repeat is `409`. The two unique indexes do not interfere.                                             |
 | **Unit Reassignment**               | Release a shop tenant, then assign that user a flat.                                        | The tenancy row is reused with `shopId` cleared — exactly one FK set, per the CHECK constraint.                         |
+| **Duplicate Meter Assign**          | Assign a meter that already sits on another flat.                                           | `409` naming the unit it is on. Releasing it there first, then assigning, succeeds.                                     |
+| **Meter Runs Backwards**            | File a reading below the meter's previous reading.                                          | Rejected on the field, naming the previous value. Nothing is written.                                                   |
+| **Reading Correction**              | File this month twice — 1100 then 1150 — from a dial that read 1000.                         | One row, 150 units, not 100 then another 50. The log shows 1100 → 1150 and who changed it.                              |
+| **Late Correction**                 | Correct January after February has been filed.                                              | `409` naming the later month — corrections start from the newest one.                                                  |
+| **Metered Invoice**                 | Generate an invoice for a flat whose meter moved 75 units.                                  | Electricity pre-fills at 750 (75 × 10), the arithmetic is stated under the field, and it stays editable.                |
+| **Resident Scope**                  | A resident opens another unit's meter, or tries to create one.                               | `403` on both. They may only file readings on the meters of the unit they occupy.                                       |
+| **Log Secrecy**                     | Create a user through the admin console, then read the activity log.                        | The entry is there; the password reads `[redacted]` and never appears in plaintext.                                    |
 
 ### 7.3 CI/CD Automated Testing Pipeline Workflow (`.github/workflows/test.yml`)
 
@@ -938,6 +1093,70 @@ rate limiters, the messaging providers and `VerifyOtpPage` are all intact and st
 spec runs the whole OTP journey with the flag forced on. To re-enable: set the variable to `true`. No
 code change, no migration.
 
+### 8.11 Metered Electricity
+
+`total = (current_reading − previous_reading) × per_unit`, summed across the meters on a unit.
+Everything below exists to make that one line trustworthy. `services/meter.service.ts` is the only
+place the arithmetic lives; `client/src/lib/schemas.ts` mirrors its input rules.
+
+**Tariff.** `DEFAULT_PER_UNIT` is `{ FLAT: 10, SHOP: 15 }` — commercial supply costs more than
+domestic. `Meter.perUnitRate` overrides it and is **null by default**, not stamped with today's
+default: a meter that has never been overridden follows the category it is currently on, so moving
+one from a flat to a shop re-rates it rather than silently carrying the domestic rate across. The
+rate in force is copied onto each `MeterReading`, so a later tariff change cannot restate a month
+that has already been billed.
+
+**Assignment.** A meter serves at most one unit (`meter_at_most_one_unit`). Reassigning an assigned
+meter is **refused, not silently moved** — the dial travels with the meter, so a mid-cycle move would
+bill one tenant for another's consumption. Releasing it first is the act that says "the readings up
+to here belong to the old unit". Both FKs are written on every assign, so the row can never point at
+two units. A unit may carry several meters; its electricity line is their sum.
+
+**Filing a reading.**
+
+1. The month's baseline is the row's own `previousReading` if a reading already exists for that
+   month, otherwise the meter's live `currentReading`. A correction therefore re-bases rather than
+   compounding: filing 1100 then 1150 in the same month is 150 units, not 100 then another 50.
+2. A reading below the baseline is refused — a dial does not run backwards.
+3. **One row per meter per month** (`@@unique([meterId, month, year])`). Corrections overwrite; the
+   before/after pair goes to the activity log, which is where the proof lives.
+4. A correction is only accepted for the **newest month on record**. Restating an earlier month would
+   move the baseline of every month after it, including ones already invoiced, without those invoices
+   changing. A 409 names the later month instead.
+5. The live dial follows what was just filed, so the next month opens where this one closed.
+
+**Invoicing.** `generateInvoice` computes the electricity line from the meters **when the caller does
+not state one** — which is why `electricityBill` has no `.default(0)` in `generateInvoiceSchema`, as a
+default of 0 would quietly turn "bill what the meters say" into "bill nothing". A meter with no
+reading for the month falls back to its live dial, so a unit is never under-billed because nobody
+filed on time; the response says which meters that applied to. The admin form pre-fills the figure and
+states the arithmetic under the field, and it stays editable (§8.4 still holds: the admin states every
+charge). Once billed, the month's readings are stamped with the invoice id.
+
+### 8.12 Activity Log
+
+Two sources feed one table:
+
+1. **Domain entries** written by the controllers that know what a change *means* — which meter, whose
+   reading, what it was before. `meter.reading.correct` carries the old and new values; this is what a
+   disputed bill is settled with.
+2. **The `auditRequests` sweep** (`middlewares/audit.ts`), which records every other successful
+   non-GET request so an endpoint nobody instrumented is still logged. A controller that wrote its own
+   entry calls `markAudited(res)`, so the same change is never logged twice.
+
+Rules worth knowing before changing any of it:
+
+- **Only successful responses are logged.** A rejected write changed nothing, and recording it would
+  bury the real history exactly when the log is being read as evidence.
+- **Never inside the caller's transaction, never fatal.** A failed audit write must not roll back the
+  business change it describes; failures go to the console.
+- **Secrets are stripped** by key name (`password`, `token`, `code`, …, matched as substrings), and
+  long strings are clamped — an audit row is a summary, not a mirror of the request body.
+- **`ActivityLog` is not in `MANAGED_TABLES`.** A log the Data Control record editor could rewrite
+  would be evidence of nothing.
+- Actor names are cached for 5 minutes to keep writes off the hot path, and the cache is dropped when
+  an account is edited or deleted so the log never renames somebody retroactively.
+
 ## 9. Separated Directory Structure
 
 ```
@@ -957,10 +1176,11 @@ amar-bari/
 │   │   │                       #   (§8.6 document rules), unit.ts (§8.9), utils.ts
 │   │   ├── pages/
 │   │   │   ├── admin/          # AdminDashboard, UsersPage, FlatsPage, ShopsPage,
-│   │   │   │                   #   InvoicesPage, ExpensesPage, AdminTicketsPage,
-│   │   │   │                   #   AdminChatPage, DataControlPage
+│   │   │   │                   #   MetersPage, InvoicesPage, ExpensesPage,
+│   │   │   │                   #   AdminTicketsPage, AdminChatPage,
+│   │   │   │                   #   ActivityLogPage, DataControlPage
 │   │   │   ├── auth/           # Login, Register, VerifyOtp
-│   │   │   └── tenant/         # Resident dashboard, rent, issues, chat, profile
+│   │   │   └── tenant/         # Resident dashboard, rent, meters, issues, chat, profile
 │   │   ├── routes/             # React Router v7 Configuration & Role Guards
 │   │   ├── services/           # Axios Base Client & API Call Modules
 │   │   ├── store/              # Zustand Global Stores
@@ -977,9 +1197,11 @@ amar-bari/
 ├── server/                     # Standalone Node.js + Express Backend API
 │   ├── src/
 │   │   ├── controllers/        # Express Route Handlers
-│   │   ├── middlewares/        # JWT Auth, Role Guard, CORS, Rate Limiter
+│   │   ├── middlewares/        # JWT Auth, Role Guard, CORS, Rate Limiter,
+│   │   │                       #   audit.ts (the catch-all activity sweep, §8.12)
 │   │   ├── routes/             # REST Route Definitions
 │   │   ├── services/           # unit.service.ts (the only flat-or-shop branch, §8.9),
+│   │   │                       #   meter.service.ts (§8.11), activity.service.ts (§8.12),
 │   │   │                       #   OTP generator, PDF/JPG engine, messaging providers
 │   │   ├── sockets/            # Socket.io Real-time Handlers
 │   │   ├── utils/              # validators.ts (mirrors client/src/lib/schemas.ts
@@ -1073,6 +1295,38 @@ and `/verify` screen are all retained and still tested with the flag forced on. 
 Worth knowing: verification was gated in **two** places — `login` and `requireApprovedTenant`. Relaxing
 only the first would have issued a session whose every request then 403'd. Both are now behind the same
 helper, with a test pinning them together.
+
+### 2026-08-13 — Electricity meters and the activity log
+
+A **Meters** menu for both roles. Admins manage meters — create, edit, delete, allocate to a flat or
+a shop, file or back-fill readings, and read a per-meter consumption report; residents do one thing,
+enter this month's reading on a meter attached to their own unit.
+
+| Area | Change | Spec |
+| :--- | :----- | :--- |
+| Meter model | `Meter` + `MeterReading`, with `meter_at_most_one_unit` and a forward-only reading CHECK. | §5, §8.11 |
+| Assignment | One unit per meter; reassigning an allocated meter is **refused** until it is released. | §3.2.9, §8.11 |
+| Allocation on create | The flat and shop forms take an optional meter, checked free *before* the unit is written. | §3.2.9 |
+| Tariff | 10/unit for flats, 15 for shops, overridable per meter. Null means "follow the category", re-read per reading rather than frozen. | §8.11 |
+| Billing | Electricity is computed from the meters and pre-filled on the invoice form, with the arithmetic stated and still editable. | §8.11 |
+| Reports | Per meter, month by month and year by year: units, tariff, amount, closing reading. | §3.2.9 |
+| Activity log | `ActivityLog` + a catch-all middleware sweep; domain entries carry before/after. Admin-only viewer at `/admin/activity`. | §3.2.10, §8.12 |
+
+Three decisions worth keeping:
+
+- **`generateInvoiceSchema.electricityBill` lost its `.default(0)`.** With a default, omitting the
+  field meant "bill nothing" rather than "bill what the meters say", which is the opposite of the
+  intent. Absence now means metered; an explicit figure still wins.
+- **A reading correction re-bases on the month's own opening value** and is refused once a later
+  month exists. Compounding, or restating a month other months are built on, would silently move
+  already-invoiced figures.
+- **`ActivityLog` is deliberately absent from `MANAGED_TABLES`** — a log the Data Control editor could
+  rewrite is not evidence.
+
+**Migration note:** `20260813120000_meters_and_activity_log` is hand-written, for the same reason as
+the shops migration — the CHECK constraints have to exist from the moment the tables do. Like its
+predecessor it has **not been run against a live database**; there is no Postgres in this development
+environment, so the meter API specs self-skipped locally and assert in CI.
 
 ---
 

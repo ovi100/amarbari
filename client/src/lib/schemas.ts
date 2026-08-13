@@ -193,6 +193,8 @@ export const flatSchema = z.object({
     .number({ invalid_type_error: 'Base rent is required' })
     .positive('Base rent must be greater than zero')
     .max(MAX_AMOUNT, 'That rent looks wrong'),
+  /** Optional meter to allocate as the flat is created (SRS 3.2.9 item 6). */
+  meterId: z.string().optional(),
 });
 export type FlatValues = z.infer<typeof flatSchema>;
 
@@ -215,8 +217,98 @@ export const shopSchema = z.object({
     .number({ invalid_type_error: 'Base rent is required' })
     .positive('Base rent must be greater than zero')
     .max(MAX_AMOUNT, 'That rent looks wrong'),
+  meterId: z.string().optional(),
 });
 export type ShopValues = z.infer<typeof shopSchema>;
+
+// --- Meters (SRS 3.2.9) -----------------------------------------------------
+
+/** Upper bound on a dial reading — catches a mis-keyed digit. */
+const MAX_READING = 10_000_000;
+
+/**
+ * A reading is a required number, not an optional one that defaults to zero:
+ * the same rule, and the same reasoning, as the invoice money fields (§8.4).
+ * `z.coerce.number()` would turn an untouched field into a stated 0.
+ */
+const readingField = (label: string) =>
+  z.preprocess(
+    (value) => {
+      if (value === '' || value === null || value === undefined) return Number.NaN;
+      return typeof value === 'string' ? Number(value) : value;
+    },
+    z
+      .number({ invalid_type_error: `${label} is required` })
+      .min(0, `${label} cannot be negative`)
+      .max(MAX_READING, `That ${label.toLowerCase()} looks wrong`)
+  );
+
+/** Default tariff per unit by category — mirrors DEFAULT_PER_UNIT on the server. */
+export const DEFAULT_PER_UNIT: Record<RentCategoryValue, number> = { FLAT: 10, SHOP: 15 };
+
+export const meterSchema = z
+  .object({
+    meterName: z
+      .string()
+      .trim()
+      .min(2, 'Meter name is required')
+      .max(120, 'Meter name is too long')
+      .refine((v) => /\p{L}|\p{N}/u.test(v), 'Enter a valid meter name'),
+    meterNumber: z
+      .string()
+      .trim()
+      .min(1, 'Meter number is required')
+      .max(40, 'Meter number is too long')
+      .regex(/^[\p{L}\p{N}][\p{L}\p{N}\s/-]*$/u, 'Use letters, digits, spaces, - or / only'),
+    previousReading: readingField('Previous reading'),
+    currentReading: readingField('Current reading'),
+    // Blank means "use the category default", which is why this one is allowed
+    // to be empty where the readings are not.
+    perUnitRate: z
+      .string()
+      .trim()
+      .optional()
+      .refine((v) => !v || Number(v) > 0, 'The per-unit rate must be greater than zero')
+      .refine((v) => !v || Number(v) <= MAX_AMOUNT, 'That rate looks wrong'),
+    /** Optional allocation at creation time (SRS 3.2.9 item 6). */
+    category: z.enum(['FLAT', 'SHOP']).optional(),
+    unitId: z.string().optional(),
+  })
+  .refine((v) => v.currentReading >= v.previousReading, {
+    message: 'The current reading cannot be below the previous reading',
+    path: ['currentReading'],
+  })
+  .refine((v) => !v.unitId || Boolean(v.category), {
+    message: 'Choose whether the unit is a flat or a shop',
+    path: ['category'],
+  });
+export type MeterValues = z.infer<typeof meterSchema>;
+
+export const assignMeterSchema = z.object({
+  category: z.enum(['FLAT', 'SHOP'], { errorMap: () => ({ message: 'Choose a category' }) }),
+  unitId: z.string().uuid('Choose a unit'),
+});
+export type AssignMeterValues = z.infer<typeof assignMeterSchema>;
+
+/**
+ * Filing a reading. The floor is the meter's previous reading — a dial does not
+ * run backwards — so the schema is built per meter, as with payments.
+ */
+export function buildReadingSchema(previousReading: number) {
+  return z.object({
+    currentReading: z.preprocess(
+      (value) => {
+        if (value === '' || value === null || value === undefined) return Number.NaN;
+        return typeof value === 'string' ? Number(value) : value;
+      },
+      z
+        .number({ invalid_type_error: 'Enter the reading shown on the meter' })
+        .min(previousReading, `Cannot be below the previous reading of ${previousReading}`)
+        .max(MAX_READING, 'That reading looks wrong')
+    ),
+  });
+}
+export type ReadingValues = { currentReading: number };
 
 /** Sentinel for "none of the listed categories fits" in the expense form. */
 export const CUSTOM_EXPENSE_CATEGORY = '__custom__';

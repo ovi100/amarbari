@@ -15,10 +15,16 @@ import { identityNumberError, normaliseIdentityNumber } from '../utils/validator
  * columns remain fully editable through the same API.
  */
 
+/**
+ * `ActivityLog` is deliberately absent: it is the record of what everyone did,
+ * and a log the record editor could rewrite would be evidence of nothing.
+ */
 export const MANAGED_TABLES = [
   'User',
   'Flat',
   'Shop',
+  'Meter',
+  'MeterReading',
   'Tenancy',
   'Invoice',
   'BuildingExpense',
@@ -38,6 +44,8 @@ const delegates: Record<ManagedTable, any> = {
   User: prisma.user,
   Flat: prisma.flat,
   Shop: prisma.shop,
+  Meter: prisma.meter,
+  MeterReading: prisma.meterReading,
   Tenancy: prisma.tenancy,
   Invoice: prisma.invoice,
   BuildingExpense: prisma.buildingExpense,

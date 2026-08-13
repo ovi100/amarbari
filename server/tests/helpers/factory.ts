@@ -71,6 +71,22 @@ export async function createShopTenancy(
   });
 }
 
+/** An electricity meter, unassigned unless a unit is named. */
+export async function createMeter(
+  overrides: Partial<Parameters<typeof prisma.meter.create>[0]['data']> = {}
+) {
+  const n = nextId();
+  return prisma.meter.create({
+    data: {
+      meterName: `Test Meter ${n}`,
+      meterNumber: `MTR-${n}-${Date.now() % 10_000}`,
+      previousReading: 0,
+      currentReading: 0,
+      ...overrides,
+    } as never,
+  });
+}
+
 export function tokenFor(user: { id: string; role: Role; phone: string }) {
   return signAccessToken({ sub: user.id, role: user.role, phone: user.phone });
 }

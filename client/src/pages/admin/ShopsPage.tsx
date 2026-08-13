@@ -25,7 +25,13 @@ import { toast } from '@/store/toast.store';
 import { AssignFlatValues, ShopValues, assignFlatSchema, shopSchema } from '@/lib/schemas';
 import type { Shop } from '@/types';
 
-const blankShop: ShopValues = { shopName: '', shopNumber: '', address: '', baseRent: 0 };
+const blankShop: ShopValues = {
+  shopName: '',
+  shopNumber: '',
+  address: '',
+  baseRent: 0,
+  meterId: '',
+};
 
 /**
  * Shops are the commercial rent category, managed alongside flats.
@@ -56,9 +62,18 @@ export default function ShopsPage() {
     defaultValues: blankShop,
   });
 
+  // A meter already on a unit has to be released before it can move, so only
+  // unallocated ones are offered here.
+  const freeMeters = useQuery({
+    queryKey: ['admin', 'meters', 'unassigned'],
+    queryFn: () => adminApi.meters({ status: 'unassigned' }),
+  });
+
   const saveShop = useMutation({
-    mutationFn: (values: ShopValues) =>
-      editor?.shop ? adminApi.updateShop(editor.shop.id, values) : adminApi.createShop(values),
+    mutationFn: ({ meterId, ...values }: ShopValues) =>
+      editor?.shop
+        ? adminApi.updateShop(editor.shop.id, values)
+        : adminApi.createShop({ ...values, meterId: meterId || null }),
     onSuccess: () => {
       toast.success(editor?.shop ? 'Shop updated' : 'Shop added');
       setEditor(null);
@@ -121,6 +136,7 @@ export default function ShopsPage() {
       shopNumber: shop.shopNumber,
       address: shop.address,
       baseRent: shop.baseRent,
+      meterId: '',
     });
     setEditor({ shop });
   };
@@ -326,6 +342,26 @@ export default function ShopsPage() {
             >
               <Textarea id="address" rows={2} placeholder="12 Mirpur Road, Dhaka" {...shopForm.register('address')} />
             </Field>
+
+            {/* Create-time allocation only; reassignment lives on the Meters
+                page, where releasing the old unit is a deliberate step. */}
+            {!editor?.shop && (
+              <Field
+                label="Electricity meter"
+                htmlFor="shopMeterId"
+                error={shopForm.formState.errors.meterId?.message}
+                hint="Optional — only meters not already on a unit are listed"
+              >
+                <Select id="shopMeterId" {...shopForm.register('meterId')}>
+                  <option value="">No meter yet</option>
+                  {(freeMeters.data?.meters ?? []).map((meter) => (
+                    <option key={meter.id} value={meter.id}>
+                      {meter.meterNumber} · {meter.meterName}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            )}
           </form>
 
           <DialogFooter>

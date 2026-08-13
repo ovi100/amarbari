@@ -4,6 +4,8 @@ import {
   Building2,
   ClipboardList,
   Database,
+  Gauge,
+  History,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -34,6 +36,7 @@ interface NavItem {
 const TENANT_NAV: NavItem[] = [
   { to: '/app', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/app/rent', label: 'Rent & Bills', icon: Wallet },
+  { to: '/app/meters', label: 'Meters', icon: Gauge },
   { to: '/app/issues', label: 'Report an Issue', icon: Wrench },
   { to: '/app/chat', label: 'Chat with Admin', icon: MessageSquare },
   { to: '/app/profile', label: 'My Profile', icon: Users },
@@ -44,10 +47,12 @@ const ADMIN_NAV: NavItem[] = [
   { to: '/admin/users', label: 'Users', icon: Users },
   { to: '/admin/flats', label: 'Flats', icon: Building2 },
   { to: '/admin/shops', label: 'Shops', icon: Store },
+  { to: '/admin/meters', label: 'Meters', icon: Gauge },
   { to: '/admin/invoices', label: 'Invoices', icon: Receipt },
   { to: '/admin/expenses', label: 'Expenses', icon: ClipboardList },
   { to: '/admin/tickets', label: 'Maintenance', icon: Wrench },
   { to: '/admin/chat', label: 'Messages', icon: MessageSquare },
+  { to: '/admin/activity', label: 'Activity Log', icon: History },
   { to: '/admin/data', label: 'Data Control', icon: Database },
 ];
 

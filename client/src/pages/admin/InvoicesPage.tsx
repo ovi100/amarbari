@@ -133,6 +133,62 @@ export default function InvoicesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedMonth, selectedYear]);
 
+  /**
+   * Electricity is metered (SRS 8.11): Σ (current − previous) × per-unit rate
+   * across the unit's meters. The figure is fetched and prefilled rather than
+   * left to be typed, but stays editable — the admin remains the one who states
+   * every charge (§8.4), and a meter can be wrong.
+   */
+  const metered = useQuery({
+    queryKey: [
+      'admin',
+      'meters',
+      'electricity',
+      category,
+      selectedFlatId,
+      selectedMonth,
+      selectedYear,
+    ],
+    queryFn: () =>
+      adminApi.electricity({
+        category,
+        unitId: selectedFlatId,
+        month: Number(selectedMonth),
+        year: Number(selectedYear),
+      }),
+    enabled:
+      Boolean(selectedFlatId) &&
+      Number(selectedMonth) >= 1 &&
+      Number(selectedMonth) <= 12 &&
+      Number(selectedYear) > 2000,
+  });
+
+  useEffect(() => {
+    if (metered.data) {
+      createForm.setValue('electricityBill', metered.data.amount, { shouldValidate: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [metered.data]);
+
+  /** What the prefilled electricity figure is made of, stated under the field. */
+  const meterHint = (() => {
+    const data = metered.data;
+    if (!data) return undefined;
+    if (data.lines.length === 0) return 'No meters on this unit — enter the charge by hand';
+    const parts = data.lines.map(
+      (line) =>
+        `${line.meterNumber}: ${line.currentReading} − ${line.previousReading} = ` +
+        `${line.unitsConsumed} × ${line.perUnitRate}`
+    );
+    return (
+      `${parts.join(' · ')}${
+        data.missingReadings.length > 0
+          ? ` — no reading filed this month for ${data.missingReadings.join(', ')}, so the dial was used`
+          : ''
+      }`
+    );
+  })();
+
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['admin'] });
 
   const create = useMutation({
@@ -465,6 +521,8 @@ export default function InvoicesPage() {
                       htmlFor={name}
                       error={createForm.formState.errors[name]?.message}
                       required
+                      hint={name === 'electricityBill' ? meterHint : undefined}
+                      className={name === 'electricityBill' ? 'sm:col-span-2' : undefined}
                     >
                       <Input
                         id={name}

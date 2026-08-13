@@ -1,5 +1,5 @@
 import { HttpResponse, http } from 'msw';
-import type { RentSummary, User } from '@/types';
+import type { MeterView, RentSummary, User } from '@/types';
 
 const API = 'http://localhost:4000/api/v1';
 
@@ -87,6 +87,27 @@ export const mockRentSummary: RentSummary = {
   },
 };
 
+/** One flat meter, unread this month — the state the resident acts on. */
+export const mockMeter: MeterView = {
+  id: 'meter-1',
+  flatId: 'flat-1',
+  shopId: null,
+  meterName: 'Ground floor east',
+  meterNumber: 'MTR-0012',
+  previousReading: 900,
+  currentReading: 1000,
+  perUnitRate: null,
+  isActive: true,
+  createdAt: '2025-01-05T00:00:00.000Z',
+  updatedAt: '2026-03-01T00:00:00.000Z',
+  unit: { category: 'FLAT', number: 'A-101', label: 'A-101', location: 'Main Building' },
+  category: 'FLAT',
+  effectiveRate: 10,
+  pendingUnits: 100,
+  pendingAmount: 1000,
+  currentMonthReading: null,
+};
+
 const ok = <T>(data: T) => HttpResponse.json({ success: true, data });
 
 export const handlers = [
@@ -131,6 +152,41 @@ export const handlers = [
         paymentStatus: rolled === 0 ? 'DEDUCTED_FROM_ADVANCE' : deducted > 0 ? 'PARTIAL' : 'DUE',
       },
       message: 'Deferral applied',
+    });
+  }),
+
+  http.get(`${API}/meters/my`, () =>
+    ok({
+      unit: mockRentSummary.unit,
+      month: 3,
+      year: 2026,
+      meters: [mockMeter],
+    })
+  ),
+
+  http.post(`${API}/meters/:id/readings`, async ({ request }) => {
+    const { currentReading } = (await request.json()) as { currentReading: number };
+    const unitsConsumed = currentReading - mockMeter.currentReading;
+    return ok({
+      meter: { ...mockMeter, previousReading: mockMeter.currentReading, currentReading },
+      reading: {
+        id: 'reading-1',
+        meterId: mockMeter.id,
+        month: 3,
+        year: 2026,
+        previousReading: mockMeter.currentReading,
+        currentReading,
+        unitsConsumed,
+        perUnitRate: mockMeter.effectiveRate,
+        amount: unitsConsumed * mockMeter.effectiveRate,
+        recordedById: mockTenant.id,
+        recordedByName: mockTenant.fullName,
+        recordedByRole: 'USER',
+        invoiceId: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      corrected: false,
     });
   }),
 

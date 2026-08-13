@@ -89,6 +89,10 @@ model User {
   tickets      MaintenanceTicket[]
   messagesSent ChatMessage[]       @relation("SentMessages")
   messagesRecv ChatMessage[]       @relation("ReceivedMessages")
+  // Both are evidence trails, so they outlive the account that created them:
+  // the FK is nulled on delete and the actor's name is snapshotted on the row.
+  meterReadings MeterReading[]
+  activityLogs  ActivityLog[]
 
   /// Admin-defined dynamic columns (SRS 3.2.1).
   customFields Json @default("{}")
@@ -111,6 +115,7 @@ model Flat {
   invoices  Invoice[]
   tickets   MaintenanceTicket[]
   expenses  BuildingExpense[]
+  meters    Meter[]
 
   customFields Json @default("{}")
 
@@ -207,6 +212,7 @@ model Shop {
   invoices  Invoice[]
   tickets   MaintenanceTicket[]
   expenses  BuildingExpense[]
+  meters    Meter[]
 
   customFields Json @default("{}")
 
@@ -271,6 +277,119 @@ model ChatMessage {
   createdAt DateTime @default(now())
 
   @@index([senderId, receiverId])
+}
+
+/// An electricity meter, assignable to a flat *or* a shop — or to neither while
+/// it sits in the pool waiting to be allocated (`meter_at_most_one_unit` CHECK).
+///
+/// A meter points at one unit at a time, which is the whole duplicate-assignment
+/// guard: re-allocating an assigned meter is refused until it is unassigned. A
+/// unit may carry several meters (a sub-metered shop), and the electricity line
+/// on its invoice is the sum across them.
+model Meter {
+  id     String  @id @default(uuid())
+  flatId String?
+  shopId String?
+  flat   Flat?   @relation(fields: [flatId], references: [id], onDelete: SetNull)
+  shop   Shop?   @relation(fields: [shopId], references: [id], onDelete: SetNull)
+
+  meterName   String
+  meterNumber String @unique
+
+  /// The live dial. `previousReading` is the value it held before the most
+  /// recent reading was recorded, so a month's consumption is their difference.
+  currentReading  Float @default(0)
+  previousReading Float @default(0)
+
+  /// Tariff per unit. Null means "use the category default" — 10 for a flat,
+  /// 15 for a shop (DEFAULT_PER_UNIT in services/meter.service.ts) — so a meter
+  /// that has never been overridden follows the default even after it moves
+  /// between categories.
+  perUnitRate Float?
+
+  isActive Boolean @default(true)
+
+  readings MeterReading[]
+
+  customFields Json @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([flatId])
+  @@index([shopId])
+}
+
+/// One row per meter per billing month: the evidence behind an electricity
+/// charge, and the source of the meter report (SRS 3.2.9).
+///
+/// Corrections overwrite the row rather than appending a second one for the
+/// same month — the month has one true closing reading — and every correction
+/// is written to `ActivityLog` with its before/after values, so the audit trail
+/// is complete without duplicating billing rows.
+model MeterReading {
+  id      String @id @default(uuid())
+  meterId String
+  meter   Meter  @relation(fields: [meterId], references: [id], onDelete: Cascade)
+
+  month Int // 1 - 12
+  year  Int
+
+  previousReading Float
+  currentReading  Float
+  /// currentReading − previousReading, stored so a later tariff or dial change
+  /// cannot silently restate a month that has already been billed.
+  unitsConsumed   Float
+  perUnitRate     Float
+  amount          Float
+
+  /// Who submitted it. Nulled if the account is deleted; the name is kept.
+  recordedById   String?
+  recordedBy     User?   @relation(fields: [recordedById], references: [id], onDelete: SetNull)
+  recordedByName String
+  recordedByRole Role    @default(USER)
+
+  /// Set once the reading has been billed onto an invoice.
+  invoiceId String?
+
+  customFields Json @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([meterId, month, year])
+  @@index([year, month])
+}
+
+/// Append-only record of every mutating action, by admins and users alike
+/// (SRS 3.2.10). Deliberately absent from `MANAGED_TABLES`: a log the Data
+/// Control editor could rewrite would not be evidence of anything.
+model ActivityLog {
+  id String @id @default(uuid())
+
+  actorId   String?
+  actor     User?   @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  actorName String
+  actorRole Role    @default(USER)
+
+  /// Verb, e.g. `meter.reading.update`, or `POST /api/v1/admin/flats` for the
+  /// catch-all middleware entries.
+  action  String
+  /// Model name, e.g. `Meter` — how the log is filtered per record.
+  entity  String
+  entityId String?
+  summary String
+
+  /// Field-level before/after for domain events; null for generic entries.
+  before Json?
+  after  Json?
+
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@index([actorId])
 }
 
 /// Metadata registry backing SRS 3.2.1 "Dynamic Database Column & Schema Management".

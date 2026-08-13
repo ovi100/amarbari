@@ -199,9 +199,14 @@ export const flatSchema = z.object({
     .number()
     .positive('Base rent must be greater than zero')
     .max(MAX_AMOUNT, 'Base rent looks wrong'),
+  /** Optional meter to allocate as the unit is created (SRS 3.2.9 item 6). */
+  meterId: z.string().uuid('Choose a meter').nullable().optional(),
 });
 
-export const updateFlatSchema = flatSchema.partial().extend({
+// `meterId` is a create-time allocation, not a column on Flat: moving a meter
+// afterwards goes through the assign/unassign routes, which carry the
+// duplicate-assignment guard.
+export const updateFlatSchema = flatSchema.omit({ meterId: true }).partial().extend({
   isOccupied: z.boolean().optional(),
 });
 
@@ -224,13 +229,119 @@ export const shopSchema = z.object({
     .number()
     .positive('Base rent must be greater than zero')
     .max(MAX_AMOUNT, 'Base rent looks wrong'),
+  meterId: z.string().uuid('Choose a meter').nullable().optional(),
 });
 
-export const updateShopSchema = shopSchema.partial().extend({
+export const updateShopSchema = shopSchema.omit({ meterId: true }).partial().extend({
   isOccupied: z.boolean().optional(),
 });
 
 export const rentCategorySchema = z.enum(['FLAT', 'SHOP']);
+
+// --- Meters (SRS 3.2.9) ----------------------------------------------------
+
+/** A dial reading: never negative, and bounded so a mis-keyed digit is caught. */
+export const MAX_READING = 10_000_000;
+
+const readingField = (label: string) =>
+  z.coerce
+    .number()
+    .min(0, `${label} cannot be negative`)
+    .max(MAX_READING, `${label} looks wrong`);
+
+/**
+ * A meter is identified by a name and a unique meter number, and may be
+ * allocated to a flat or a shop at creation time (SRS 3.2.9 item 6).
+ * `perUnitRate` left out means "follow the category default" — 10 for a flat,
+ * 15 for a shop.
+ */
+export const meterSchema = z
+  .object({
+    meterName: z
+      .string()
+      .trim()
+      .min(2, 'Meter name is required')
+      .max(120, 'Meter name is too long')
+      .refine((v) => /\p{L}|\p{N}/u.test(v), 'Enter a valid meter name'),
+    meterNumber: z
+      .string()
+      .trim()
+      .min(1, 'Meter number is required')
+      .max(40, 'Meter number is too long')
+      .regex(/^[\p{L}\p{N}][\p{L}\p{N}\s/-]*$/u, 'Use letters, digits, spaces, - or / only'),
+    previousReading: readingField('Previous reading').default(0),
+    currentReading: readingField('Current reading').default(0),
+    perUnitRate: z.coerce
+      .number()
+      .positive('The per-unit rate must be greater than zero')
+      .max(MAX_AMOUNT, 'That rate looks wrong')
+      .nullable()
+      .optional(),
+    category: rentCategorySchema.optional(),
+    unitId: z.string().uuid('Choose a unit').nullable().optional(),
+  })
+  .refine((v) => v.currentReading >= v.previousReading, {
+    message: 'The current reading cannot be below the previous reading',
+    path: ['currentReading'],
+  })
+  // Allocating on create needs both halves; either alone is an incomplete
+  // instruction rather than something to guess at.
+  .refine((v) => !v.unitId || Boolean(v.category), {
+    message: 'Choose whether the unit is a flat or a shop',
+    path: ['category'],
+  });
+
+export const updateMeterSchema = z
+  .object({
+    meterName: z.string().trim().min(2, 'Meter name is required').max(120).optional(),
+    meterNumber: z
+      .string()
+      .trim()
+      .min(1, 'Meter number is required')
+      .max(40)
+      .regex(/^[\p{L}\p{N}][\p{L}\p{N}\s/-]*$/u, 'Use letters, digits, spaces, - or / only')
+      .optional(),
+    previousReading: readingField('Previous reading').optional(),
+    currentReading: readingField('Current reading').optional(),
+    perUnitRate: z.coerce
+      .number()
+      .positive('The per-unit rate must be greater than zero')
+      .max(MAX_AMOUNT, 'That rate looks wrong')
+      .nullable()
+      .optional(),
+    isActive: z.boolean().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to update' });
+
+export const assignMeterSchema = z.object({
+  category: rentCategorySchema,
+  unitId: z.string().uuid('Choose a unit'),
+});
+
+/**
+ * A resident files the current month's reading; an admin may back-fill an
+ * earlier month. The month is defaulted server-side rather than trusted from
+ * the client clock.
+ */
+export const meterReadingSchema = z.object({
+  currentReading: readingField('Reading'),
+  month: z.coerce.number().int().min(1).max(12).optional(),
+  year: z.coerce.number().int().min(2000).max(2100).optional(),
+});
+
+export const meterReportQuerySchema = z.object({
+  year: z.coerce.number().int().min(2000).max(2100).optional(),
+});
+
+export const electricityQuerySchema = z.object({
+  category: rentCategorySchema,
+  unitId: z.string().uuid('Choose a unit'),
+  month: z.coerce.number().int().min(1).max(12),
+  year: z.coerce.number().int().min(2000).max(2100),
+});
+
+// `meterListQuerySchema` and `activityQuerySchema` extend `listQuerySchema`,
+// which is declared further down — they live at the foot of this file.
 
 /**
  * A tenancy may be back-dated to record an existing arrangement, or dated
@@ -292,7 +403,9 @@ export const generateInvoiceSchema = z
     month: z.coerce.number().int().min(1).max(12),
     year: z.coerce.number().int().min(2000).max(2100),
     flatRent: money('Rent').optional(),
-    electricityBill: money('Electricity bill').default(0),
+    // No default: omitting it means "bill what the meters say" (SRS 8.11),
+    // which a default of 0 would quietly turn into "bill nothing".
+    electricityBill: money('Electricity bill').optional(),
     waterBill: money('Water bill').default(0),
     internetBill: money('Internet bill').default(0),
     utilityBill: money('Utility charge').default(0),
@@ -364,6 +477,17 @@ export const listQuerySchema = paginationSchema.extend({
   search: z.string().trim().max(120).optional(),
   sortBy: z.string().trim().max(60).optional(),
   sortDir: z.enum(['asc', 'desc']).default('desc'),
+});
+
+export const meterListQuerySchema = listQuerySchema.extend({
+  status: z.enum(['assigned', 'unassigned']).optional(),
+  category: rentCategorySchema.optional(),
+});
+
+export const activityQuerySchema = listQuerySchema.extend({
+  entity: z.string().trim().max(60).optional(),
+  entityId: z.string().uuid().optional(),
+  actorId: z.string().uuid().optional(),
 });
 
 export const userListQuerySchema = listQuerySchema.extend({

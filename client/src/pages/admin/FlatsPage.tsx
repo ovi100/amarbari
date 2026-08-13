@@ -25,7 +25,13 @@ import { toast } from '@/store/toast.store';
 import { AssignFlatValues, FlatValues, assignFlatSchema, flatSchema } from '@/lib/schemas';
 import type { Flat } from '@/types';
 
-const blankFlat: FlatValues = { flatNumber: '', floor: 1, building: 'Main Building', baseRent: 0 };
+const blankFlat: FlatValues = {
+  flatNumber: '',
+  floor: 1,
+  building: 'Main Building',
+  baseRent: 0,
+  meterId: '',
+};
 
 export default function FlatsPage() {
   const queryClient = useQueryClient();
@@ -50,9 +56,18 @@ export default function FlatsPage() {
     defaultValues: blankFlat,
   });
 
+  // Only unassigned meters can be allocated — one already on a unit has to be
+  // released from it first, so offering it here would only earn a rejection.
+  const freeMeters = useQuery({
+    queryKey: ['admin', 'meters', 'unassigned'],
+    queryFn: () => adminApi.meters({ status: 'unassigned' }),
+  });
+
   const saveFlat = useMutation({
-    mutationFn: (values: FlatValues) =>
-      editor?.flat ? adminApi.updateFlat(editor.flat.id, values) : adminApi.createFlat(values),
+    mutationFn: ({ meterId, ...values }: FlatValues) =>
+      editor?.flat
+        ? adminApi.updateFlat(editor.flat.id, values)
+        : adminApi.createFlat({ ...values, meterId: meterId || null }),
     onSuccess: () => {
       toast.success(editor?.flat ? 'Flat updated' : 'Flat added');
       setEditor(null);
@@ -115,6 +130,7 @@ export default function FlatsPage() {
       floor: flat.floor,
       building: flat.building,
       baseRent: flat.baseRent,
+      meterId: '',
     });
     setEditor({ flat });
   };
@@ -302,6 +318,26 @@ export default function FlatsPage() {
             <Field label="Building" htmlFor="building" error={flatForm.formState.errors.building?.message} required>
               <Input id="building" {...flatForm.register('building')} />
             </Field>
+
+            {/* Only offered on create: moving a meter afterwards goes through
+                the Meters page, where the release step is explicit. */}
+            {!editor?.flat && (
+              <Field
+                label="Electricity meter"
+                htmlFor="flatMeterId"
+                error={flatForm.formState.errors.meterId?.message}
+                hint="Optional — only meters not already on a unit are listed"
+              >
+                <Select id="flatMeterId" {...flatForm.register('meterId')}>
+                  <option value="">No meter yet</option>
+                  {(freeMeters.data?.meters ?? []).map((meter) => (
+                    <option key={meter.id} value={meter.id}>
+                      {meter.meterNumber} · {meter.meterName}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            )}
           </form>
 
           <DialogFooter>

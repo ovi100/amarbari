@@ -1,24 +1,31 @@
 import { Router } from 'express';
 import { Role } from '@prisma/client';
 import * as admin from '../controllers/admin.controller';
+import * as meters from '../controllers/meter.controller';
 import { requireAuth, requireRole } from '../middlewares/auth';
 import { validate } from '../middlewares/validate';
 import {
+  activityQuerySchema,
   addColumnSchema,
   adminCreateUserSchema,
   adminUpdateUserSchema,
   analyticsRangeSchema,
   approvalSchema,
   assignFlatSchema,
+  assignMeterSchema,
+  electricityQuerySchema,
   expenseSchema,
   exportQuerySchema,
   flatSchema,
   idParamSchema,
   listQuerySchema,
+  meterListQuerySchema,
+  meterSchema,
   shopSchema,
   tableQuerySchema,
   tenancySchema,
   updateFlatSchema,
+  updateMeterSchema,
   updateShopSchema,
   updateTenancySchema,
   userListQuerySchema,
@@ -88,6 +95,31 @@ router.post(
 );
 router.delete('/shops/:id/tenancy', validate(idParamSchema, 'params'), admin.releaseShop);
 router.delete('/shops/:id', validate(idParamSchema, 'params'), admin.deleteShop);
+
+// --- Meters ----------------------------------------------------------------
+// Management is admin-only; residents file readings through /meters (see
+// meter.routes.ts), which is mounted for both roles.
+router.get('/meters/summary', meters.summary);
+router.get('/meters/electricity', validate(electricityQuerySchema, 'query'), meters.electricity);
+router.get('/meters', validate(meterListQuerySchema, 'query'), meters.list);
+router.post('/meters', validate(meterSchema), meters.create);
+router.patch(
+  '/meters/:id',
+  validate(idParamSchema, 'params'),
+  validate(updateMeterSchema),
+  meters.update
+);
+router.post(
+  '/meters/:id/assign',
+  validate(idParamSchema, 'params'),
+  validate(assignMeterSchema),
+  meters.assign
+);
+router.delete('/meters/:id/assign', validate(idParamSchema, 'params'), meters.unassign);
+router.delete('/meters/:id', validate(idParamSchema, 'params'), meters.remove);
+
+// --- Activity log ----------------------------------------------------------
+router.get('/activity', validate(activityQuerySchema, 'query'), admin.listActivityLog);
 
 // --- Tenancies -------------------------------------------------------------
 router.post('/tenancies', validate(tenancySchema), admin.createTenancy);

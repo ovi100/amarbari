@@ -29,7 +29,8 @@ export async function resetDatabase() {
   await prisma.$executeRawUnsafe(`
     TRUNCATE TABLE
       "ChatMessage", "MaintenanceTicket", "BuildingExpense",
-      "Invoice", "Tenancy", "Flat", "User", "DynamicColumn"
+      "ActivityLog", "MeterReading", "Meter",
+      "Invoice", "Tenancy", "Flat", "Shop", "User", "DynamicColumn"
     RESTART IDENTITY CASCADE;
   `);
 }

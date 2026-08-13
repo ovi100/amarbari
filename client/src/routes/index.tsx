@@ -17,11 +17,14 @@ const RentPage = lazy(() => import('@/pages/tenant/RentPage'));
 const IssuesPage = lazy(() => import('@/pages/tenant/IssuesPage'));
 const TenantChatPage = lazy(() => import('@/pages/tenant/TenantChatPage'));
 const ProfilePage = lazy(() => import('@/pages/tenant/ProfilePage'));
+const TenantMetersPage = lazy(() => import('@/pages/tenant/MetersPage'));
 
 const AdminDashboard = lazy(() => import('@/pages/admin/AdminDashboard'));
 const UsersPage = lazy(() => import('@/pages/admin/UsersPage'));
 const FlatsPage = lazy(() => import('@/pages/admin/FlatsPage'));
 const ShopsPage = lazy(() => import('@/pages/admin/ShopsPage'));
+const MetersPage = lazy(() => import('@/pages/admin/MetersPage'));
+const ActivityLogPage = lazy(() => import('@/pages/admin/ActivityLogPage'));
 const InvoicesPage = lazy(() => import('@/pages/admin/InvoicesPage'));
 const ExpensesPage = lazy(() => import('@/pages/admin/ExpensesPage'));
 const AdminTicketsPage = lazy(() => import('@/pages/admin/AdminTicketsPage'));
@@ -61,6 +64,7 @@ export function AppRoutes() {
             <Route path="/app" element={<AppLayout variant="tenant" />}>
               <Route index element={<TenantDashboard />} />
               <Route path="rent" element={<RentPage />} />
+              <Route path="meters" element={<TenantMetersPage />} />
               <Route path="issues" element={<IssuesPage />} />
               <Route path="chat" element={<TenantChatPage />} />
               <Route path="profile" element={<ProfilePage />} />
@@ -75,10 +79,12 @@ export function AppRoutes() {
               <Route path="tenants" element={<Navigate to="/admin/users" replace />} />
               <Route path="flats" element={<FlatsPage />} />
               <Route path="shops" element={<ShopsPage />} />
+              <Route path="meters" element={<MetersPage />} />
               <Route path="invoices" element={<InvoicesPage />} />
               <Route path="expenses" element={<ExpensesPage />} />
               <Route path="tickets" element={<AdminTicketsPage />} />
               <Route path="chat" element={<AdminChatPage />} />
+              <Route path="activity" element={<ActivityLogPage />} />
               <Route path="data" element={<DataControlPage />} />
             </Route>
           </Route>

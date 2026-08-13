@@ -1,21 +1,29 @@
 import api, { unwrap } from './api';
 import type {
+  ActivityLogEntry,
   Analytics,
   BuildingExpense,
   ChatMessage,
   Conversation,
   DeferralMode,
   DeferralSettlement,
+  ElectricityCharge,
   Flat,
   Invoice,
   MaintenanceTicket,
+  MeterReading,
+  MeterReport,
+  MeterSummary,
+  MeterView,
   Pagination,
+  RentCategory,
   RentSummary,
   Shop,
   TableDescriptor,
   TablePage,
   Tenancy,
   TicketStatus,
+  UnitSummary,
   User,
 } from '@/types';
 
@@ -138,6 +146,34 @@ export const invoiceApi = {
   },
 };
 
+// --- Meters -----------------------------------------------------------------
+
+/**
+ * Reachable by both roles. Management (create, edit, assign) is under
+ * `adminApi`; what is here is what a resident may also do — see their own
+ * meters, file a reading, read the consumption report.
+ */
+export const meterApi = {
+  mine: () =>
+    unwrap<{ unit: UnitSummary | null; month: number; year: number; meters: MeterView[] }>(
+      api.get('/meters/my')
+    ),
+
+  get: (id: string) => unwrap<MeterView>(api.get(`/meters/${id}`)),
+
+  readings: (id: string, year?: number) =>
+    unwrap<MeterReading[]>(api.get(`/meters/${id}/readings`, { params: { year } })),
+
+  /** Files (or corrects) a month's reading. Month/year are admin-only. */
+  submitReading: (id: string, payload: { currentReading: number; month?: number; year?: number }) =>
+    unwrap<{ meter: MeterView; reading: MeterReading; corrected: boolean }>(
+      api.post(`/meters/${id}/readings`, payload)
+    ),
+
+  report: (id: string, year?: number) =>
+    unwrap<MeterReport>(api.get(`/meters/${id}/report`, { params: { year } })),
+};
+
 // --- Tickets ----------------------------------------------------------------
 
 export const ticketApi = {
@@ -226,8 +262,14 @@ export const adminApi = {
 
   flats: (params: { search?: string } = {}) => unwrap<Flat[]>(api.get('/admin/flats', { params })),
 
-  createFlat: (payload: { flatNumber: string; floor: number; building: string; baseRent: number }) =>
-    unwrap<Flat>(api.post('/admin/flats', payload)),
+  createFlat: (payload: {
+    flatNumber: string;
+    floor: number;
+    building: string;
+    baseRent: number;
+    /** Optional meter to allocate as the flat is created. */
+    meterId?: string | null;
+  }) => unwrap<Flat>(api.post('/admin/flats', payload)),
 
   updateFlat: (
     id: string,
@@ -252,6 +294,7 @@ export const adminApi = {
     shopNumber: string;
     address: string;
     baseRent: number;
+    meterId?: string | null;
   }) => unwrap<Shop>(api.post('/admin/shops', payload)),
 
   updateShop: (
@@ -268,6 +311,78 @@ export const adminApi = {
   ) => unwrap<Tenancy>(api.post(`/admin/shops/${shopId}/tenancy`, payload)),
 
   releaseShop: (shopId: string) => unwrap<Tenancy>(api.delete(`/admin/shops/${shopId}/tenancy`)),
+
+  // --- Meters ---------------------------------------------------------------
+  meters: (
+    params: {
+      page?: number;
+      pageSize?: number;
+      search?: string;
+      status?: 'assigned' | 'unassigned';
+      category?: RentCategory;
+    } = {}
+  ) =>
+    unwrap<{ meters: MeterView[]; pagination: Pagination }>(
+      api.get('/admin/meters', { params: { page: 1, pageSize: 100, ...params } })
+    ),
+
+  meterSummary: (params: { month?: number; year?: number } = {}) =>
+    unwrap<MeterSummary>(api.get('/admin/meters/summary', { params })),
+
+  createMeter: (payload: {
+    meterName: string;
+    meterNumber: string;
+    previousReading: number;
+    currentReading: number;
+    perUnitRate?: number | null;
+    /** Optional allocation at creation time. */
+    category?: RentCategory;
+    unitId?: string | null;
+  }) => unwrap<MeterView>(api.post('/admin/meters', payload)),
+
+  updateMeter: (
+    id: string,
+    payload: {
+      meterName?: string;
+      meterNumber?: string;
+      previousReading?: number;
+      currentReading?: number;
+      perUnitRate?: number | null;
+      isActive?: boolean;
+    }
+  ) => unwrap<MeterView>(api.patch(`/admin/meters/${id}`, payload)),
+
+  deleteMeter: (id: string) =>
+    unwrap<{ deleted: string; meterNumber: string }>(api.delete(`/admin/meters/${id}`)),
+
+  /** Refused if the meter is already assigned — release it first. */
+  assignMeter: (id: string, payload: { category: RentCategory; unitId: string }) =>
+    unwrap<MeterView>(api.post(`/admin/meters/${id}/assign`, payload)),
+
+  unassignMeter: (id: string) => unwrap<MeterView>(api.delete(`/admin/meters/${id}/assign`)),
+
+  /** What the electricity line will come to, for the invoice form's prefill. */
+  electricity: (params: {
+    category: RentCategory;
+    unitId: string;
+    month: number;
+    year: number;
+  }) => unwrap<ElectricityCharge>(api.get('/admin/meters/electricity', { params })),
+
+  // --- Activity log ---------------------------------------------------------
+  activity: (
+    params: {
+      page?: number;
+      pageSize?: number;
+      search?: string;
+      entity?: string;
+      entityId?: string;
+      actorId?: string;
+    } = {}
+  ) =>
+    unwrap<{ entries: ActivityLogEntry[]; pagination: Pagination }>(
+      api.get('/admin/activity', { params: { page: 1, pageSize: 100, ...params } })
+    ),
 
   createTenancy: (payload: {
     userId: string;

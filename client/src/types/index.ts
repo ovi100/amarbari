@@ -45,6 +45,14 @@ export interface User {
   tenancy?: (Tenancy & { flat: Flat | null; shop?: Shop | null }) | null;
 }
 
+/** Type-agnostic view of a rented unit — mirrors `UnitSummary` on the server. */
+export interface UnitSummary {
+  category: RentCategory;
+  number: string;
+  label: string;
+  location: string;
+}
+
 /** A commercial unit — the other rent category alongside `Flat`. */
 export interface Shop {
   id: string;
@@ -56,6 +64,7 @@ export interface Shop {
   createdAt: string;
   updatedAt: string;
   tenancies?: (Tenancy & { user: Pick<User, 'id' | 'fullName' | 'phone'> })[];
+  meters?: Meter[];
 }
 
 export interface Flat {
@@ -68,6 +77,139 @@ export interface Flat {
   createdAt: string;
   updatedAt: string;
   tenancies?: (Tenancy & { user: Pick<User, 'id' | 'fullName' | 'phone'> })[];
+  meters?: Meter[];
+}
+
+/**
+ * An electricity meter. Assigned to a flat *or* a shop, or to neither while it
+ * waits in the pool — reassigning an assigned meter is refused until it is
+ * released.
+ */
+export interface Meter {
+  id: string;
+  flatId: string | null;
+  shopId: string | null;
+  meterName: string;
+  meterNumber: string;
+  currentReading: number;
+  previousReading: number;
+  /** Null means "follow the category default" — 10 for a flat, 15 for a shop. */
+  perUnitRate: number | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** What the API returns for a meter: the row plus its resolved unit and tariff. */
+export interface MeterView extends Meter {
+  unit: UnitSummary | null;
+  category: RentCategory | null;
+  effectiveRate: number;
+  /** Consumption implied by the dial as it stands, before a reading is filed. */
+  pendingUnits: number;
+  pendingAmount: number;
+  /** Present on the resident's own list. */
+  currentMonthReading?: MeterReading | null;
+}
+
+/** One meter, one billing month — the evidence behind an electricity charge. */
+export interface MeterReading {
+  id: string;
+  meterId: string;
+  month: number;
+  year: number;
+  previousReading: number;
+  currentReading: number;
+  unitsConsumed: number;
+  perUnitRate: number;
+  amount: number;
+  recordedById: string | null;
+  recordedByName: string;
+  recordedByRole: Role;
+  invoiceId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MeterReportMonth {
+  month: number;
+  label: string;
+  previousReading: number | null;
+  currentReading: number | null;
+  unitsConsumed: number;
+  perUnitRate: number | null;
+  amount: number;
+  recordedByName: string | null;
+  recordedAt: string | null;
+  invoiceId: string | null;
+}
+
+export interface MeterReport {
+  meter: MeterView;
+  year: number;
+  availableYears: number[];
+  months: MeterReportMonth[];
+  yearTotals: {
+    unitsConsumed: number;
+    amount: number;
+    monthsRecorded: number;
+    closingReading: number;
+    openingReading: number | null;
+  };
+  yearly: {
+    year: number;
+    unitsConsumed: number;
+    amount: number;
+    closingReading: number;
+    months: number;
+  }[];
+  currentReading: number;
+}
+
+/** The metered electricity charge for one unit and month (SRS 8.11). */
+export interface ElectricityCharge {
+  amount: number;
+  units: number;
+  lines: {
+    meterId: string;
+    meterNumber: string;
+    meterName: string;
+    previousReading: number;
+    currentReading: number;
+    unitsConsumed: number;
+    perUnitRate: number;
+    amount: number;
+    /** False when no reading was filed and the live dial was used instead. */
+    fromReading: boolean;
+  }[];
+  missingReadings: string[];
+}
+
+export interface MeterSummary {
+  month: number;
+  year: number;
+  meters: number;
+  assigned: number;
+  unassigned: number;
+  readingsFiled: number;
+  unitsConsumed: number;
+  amount: number;
+}
+
+/** One entry in the audit trail (SRS 3.2.10). */
+export interface ActivityLogEntry {
+  id: string;
+  actorId: string | null;
+  actorName: string;
+  actorRole: Role;
+  action: string;
+  entity: string;
+  entityId: string | null;
+  summary: string;
+  before: unknown;
+  after: unknown;
+  ip: string | null;
+  createdAt: string;
 }
 
 export interface Tenancy {
@@ -121,7 +263,7 @@ export interface Invoice {
 export interface RentSummary {
   tenancy: Tenancy & { duration: TenancyDuration };
   /** Type-agnostic view of the rented unit. */
-  unit: { category: RentCategory; number: string; label: string; location: string };
+  unit: UnitSummary;
   flat: Flat | null;
   shop?: Shop | null;
   currentInvoice: (Invoice & { outstanding: number }) | null;

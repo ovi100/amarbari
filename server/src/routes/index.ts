@@ -3,6 +3,7 @@ import authRoutes from './auth.routes';
 import rentRoutes from './rent.routes';
 import ticketRoutes from './ticket.routes';
 import invoiceRoutes from './invoice.routes';
+import meterRoutes from './meter.routes';
 import adminRoutes from './admin.routes';
 import chatRoutes from './chat.routes';
 import { getStoreMode } from '../utils/keyValueStore';
@@ -20,6 +21,7 @@ router.use('/auth', authRoutes);
 router.use('/rent', rentRoutes);
 router.use('/tickets', ticketRoutes);
 router.use('/invoices', invoiceRoutes);
+router.use('/meters', meterRoutes);
 router.use('/admin', adminRoutes);
 router.use('/chat', chatRoutes);
 

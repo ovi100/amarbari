@@ -67,11 +67,42 @@ async function main() {
     { shopNumber: 'S-02', shopName: 'Nila Tailors', address: '14 Mirpur Road, Dhaka', baseRent: 26000 },
   ];
 
+  const shops = [];
   for (const spec of shopSpecs) {
-    await prisma.shop.upsert({
-      where: { shopNumber: spec.shopNumber },
+    shops.push(
+      await prisma.shop.upsert({
+        where: { shopNumber: spec.shopNumber },
+        update: {},
+        create: spec,
+      })
+    );
+  }
+
+  // Electricity meters: one on each occupied flat, one on a shop, and one left
+  // in the pool so the assign flow has something to work with on a fresh
+  // install. Rates are left null, so each follows its category default.
+  const meterSpecs = [
+    { meterNumber: 'MTR-1001', meterName: 'A-101 domestic', flat: 'A-101', previous: 4200, current: 4310 },
+    { meterNumber: 'MTR-1002', meterName: 'A-201 domestic', flat: 'A-201', previous: 3100, current: 3195 },
+    { meterNumber: 'MTR-1003', meterName: 'B-301 domestic', flat: 'B-301', previous: 5600, current: 5742 },
+    { meterNumber: 'MTR-2001', meterName: 'S-01 commercial', shop: 'S-01', previous: 8800, current: 9050 },
+    { meterNumber: 'MTR-9000', meterName: 'Spare (unallocated)', previous: 0, current: 0 },
+  ] as { meterNumber: string; meterName: string; flat?: string; shop?: string; previous: number; current: number }[];
+
+  for (const spec of meterSpecs) {
+    const flat = spec.flat ? flats.find((f) => f.flatNumber === spec.flat) : undefined;
+    const shop = spec.shop ? shops.find((s) => s.shopNumber === spec.shop) : undefined;
+    await prisma.meter.upsert({
+      where: { meterNumber: spec.meterNumber },
       update: {},
-      create: spec,
+      create: {
+        meterNumber: spec.meterNumber,
+        meterName: spec.meterName,
+        previousReading: spec.previous,
+        currentReading: spec.current,
+        ...(flat ? { flatId: flat.id } : {}),
+        ...(shop ? { shopId: shop.id } : {}),
+      },
     });
   }
 
