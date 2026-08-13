@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { Prisma, Role } from '@prisma/client';
 import prisma from '../utils/prisma';
+import { env } from '../config/env';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler } from '../utils/asyncHandler';
 import { defaultRange, getAnalytics } from '../services/analytics.service';
@@ -20,7 +21,7 @@ import { calculateTenancyDuration } from '../services/rent.service';
 import { identityNumberError } from '../utils/validators';
 import { describeUnit } from '../services/unit.service';
 import { assertMeterAvailable, assignMeter, metersForUnit } from '../services/meter.service';
-import { listActivity } from '../services/activity.service';
+import { listActivity, pruneActivityLog } from '../services/activity.service';
 import { forgetCachedActor } from '../middlewares/audit';
 import { emitToUser } from '../sockets';
 
@@ -722,6 +723,28 @@ export const listActivityLog = asyncHandler(async (req: Request, res: Response) 
     actorId?: string;
   };
   res.json({ success: true, data: await listActivity(query) });
+});
+
+/**
+ * Runs the retention policy now, rather than waiting for the daily sweep
+ * (SRS 8.12).
+ *
+ * A caller may pass a *longer* window than the deployment's — pruning less —
+ * but never a shorter one: the clamp means an HTTP request can never destroy
+ * more history than the configured policy allows, whoever sends it.
+ */
+export const pruneActivityLogNow = asyncHandler(async (req: Request, res: Response) => {
+  const body = req.body as { retentionDays?: number; evidenceRetentionDays?: number };
+
+  const result = await pruneActivityLog({
+    retentionDays: Math.max(env.activityLog.retentionDays, body.retentionDays ?? 0),
+    evidenceRetentionDays:
+      body.evidenceRetentionDays === undefined
+        ? env.activityLog.evidenceRetentionDays
+        : Math.max(env.activityLog.evidenceRetentionDays, body.evidenceRetentionDays),
+  });
+
+  res.json({ success: true, data: result });
 });
 
 // --- Analytics & export (SRS 3.2.3 / 3.2.4) --------------------------------

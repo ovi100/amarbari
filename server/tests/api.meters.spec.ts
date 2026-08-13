@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app';
 import { databaseAvailable, prisma, resetDatabase } from './helpers/db';
+import { pruneActivityLog } from '../src/services/activity.service';
 import {
   bearer,
   createAdmin,
@@ -518,6 +519,91 @@ describe('activity log (SRS 3.2.10)', () => {
     await request(app)
       .get('/api/v1/admin/activity')
       .set('Authorization', bearer(tenant))
+      .expect(403);
+  });
+});
+
+describe('activity log retention (SRS 8.12)', () => {
+  /** Writes an entry directly, dated into the past. */
+  const entry = (action: string, daysAgo: number) =>
+    prisma.activityLog.create({
+      data: {
+        actorName: 'Test Admin',
+        actorRole: 'ADMIN',
+        action,
+        entity: 'Meter',
+        summary: action,
+        createdAt: new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000),
+      },
+    });
+
+  it('ages out request sweep entries but keeps billing evidence', async () => {
+    if (!dbUp) return;
+    await entry('POST /api/v1/admin/flats', 400);
+    await entry('PATCH /api/v1/admin/meters/x', 400);
+    await entry('POST /api/v1/admin/flats', 10);
+    await entry('meter.reading.correct', 400);
+    await entry('meter.reading.record', 10);
+
+    const result = await pruneActivityLog({ retentionDays: 365 });
+
+    expect(result.sweepRemoved).toBe(2);
+    expect(result.evidenceRemoved).toBe(0);
+
+    const left = await prisma.activityLog.findMany({ orderBy: { action: 'asc' } });
+    expect(left.map((e) => e.action)).toEqual([
+      'POST /api/v1/admin/flats',
+      'meter.reading.correct',
+      'meter.reading.record',
+    ]);
+  });
+
+  it('only discards evidence when a window is explicitly set', async () => {
+    if (!dbUp) return;
+    await entry('meter.reading.correct', 800);
+    await entry('meter.reading.correct', 100);
+
+    // The default of 0 means "keep forever".
+    expect((await pruneActivityLog({ evidenceRetentionDays: 0 })).evidenceRemoved).toBe(0);
+    expect(await prisma.activityLog.count()).toBe(2);
+
+    expect((await pruneActivityLog({ evidenceRetentionDays: 365 })).evidenceRemoved).toBe(1);
+    expect(await prisma.activityLog.count()).toBe(1);
+  });
+
+  it('deletes in batches until the table is clear', async () => {
+    if (!dbUp) return;
+    for (let i = 0; i < 7; i += 1) await entry('DELETE /api/v1/admin/flats/x', 400);
+
+    const result = await pruneActivityLog({ retentionDays: 365, batchSize: 2 });
+
+    expect(result.sweepRemoved).toBe(7);
+    expect(await prisma.activityLog.count()).toBe(0);
+  });
+
+  it('exposes a manual sweep that cannot prune more than policy allows', async () => {
+    if (!dbUp) return;
+    const admin = await createAdmin();
+    await entry('POST /api/v1/admin/flats', 200);
+
+    // 30 days would delete it; the configured 365-day floor wins, so it stays.
+    const res = await request(app)
+      .post('/api/v1/admin/activity/prune')
+      .set('Authorization', bearer(admin))
+      .send({ retentionDays: 30 })
+      .expect(200);
+
+    expect(res.body.data.sweepRemoved).toBe(0);
+    expect(await prisma.activityLog.count()).toBeGreaterThan(0);
+  });
+
+  it('keeps the manual sweep away from residents', async () => {
+    if (!dbUp) return;
+    const tenant = await createUser();
+    await request(app)
+      .post('/api/v1/admin/activity/prune')
+      .set('Authorization', bearer(tenant))
+      .send({})
       .expect(403);
   });
 });

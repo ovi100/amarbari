@@ -135,6 +135,20 @@ services:
       - key: RATE_LIMIT_OTP
         value: "5"
 
+      # ---- Activity log retention (SRS 8.12) ----
+      # The log gains a row per mutation, so it is pruned daily in-process.
+      # The two windows are not interchangeable: the request sweep is
+      # operational noise and ages out at a year, while domain entries — a
+      # corrected meter reading and who changed it — are billing evidence and
+      # are kept forever (0). Set the evidence window only if you have decided
+      # to discard proof.
+      - key: ACTIVITY_LOG_PRUNE
+        value: "true"
+      - key: ACTIVITY_LOG_RETENTION_DAYS
+        value: "365"
+      - key: ACTIVITY_LOG_EVIDENCE_RETENTION_DAYS
+        value: "0"
+
       # ---- Uploads ----
       # Must match the disk mountPath above.
       - key: UPLOAD_DIR

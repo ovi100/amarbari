@@ -1,5 +1,6 @@
 import { Prisma, Role } from '@prisma/client';
 import prisma from '../utils/prisma';
+import { env } from '../config/env';
 import { logger } from '../utils/logger';
 
 /**
@@ -144,6 +145,134 @@ export async function recordActivity(input: RecordActivityInput): Promise<void> 
     // Never let auditing break the operation it is describing.
     logger.error('Failed to write activity log entry', input.action, error);
   }
+}
+
+// --- Retention (SRS 8.12) --------------------------------------------------
+
+/**
+ * A generic sweep entry's action is the request line — `POST /api/v1/...`.
+ * Domain entries use dotted verbs (`meter.reading.correct`), so the leading
+ * HTTP method is what separates disposable noise from billing evidence. The
+ * pattern is anchored, so a domain action could never start with one.
+ */
+const SWEEP_ACTION_PATTERN = '^(GET|POST|PATCH|PUT|DELETE) ';
+
+export interface PruneResult {
+  sweepRemoved: number;
+  evidenceRemoved: number;
+  /** Cut-offs actually applied, for the log line and the API response. */
+  sweepBefore: Date | null;
+  evidenceBefore: Date | null;
+}
+
+const daysAgo = (days: number) => new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+/**
+ * Deletes rows in batches until fewer than `batchSize` come back.
+ *
+ * `deleteMany` cannot be limited, and an unbounded DELETE over a table with a
+ * year of entries would hold one long transaction against live traffic. The
+ * subquery picks the ids first, so each statement is bounded and interruptible:
+ * a prune that dies half-way has still made progress, and the next run resumes.
+ */
+async function deleteInBatches(
+  before: Date,
+  matchesSweep: boolean,
+  batchSize: number
+): Promise<number> {
+  let removed = 0;
+
+  for (;;) {
+    const deleted = await prisma.$executeRaw`
+      DELETE FROM "ActivityLog"
+      WHERE "id" IN (
+        SELECT "id" FROM "ActivityLog"
+        WHERE "createdAt" < ${before}
+          AND ("action" ~ ${SWEEP_ACTION_PATTERN}) = ${matchesSweep}
+        LIMIT ${batchSize}
+      )
+    `;
+    removed += deleted;
+    if (deleted < batchSize) return removed;
+  }
+}
+
+/**
+ * Applies the retention policy. Safe to run concurrently on several instances —
+ * the predicate is idempotent, and a row another instance already deleted is
+ * simply not there.
+ */
+export async function pruneActivityLog(
+  options: {
+    retentionDays?: number;
+    evidenceRetentionDays?: number;
+    batchSize?: number;
+  } = {}
+): Promise<PruneResult> {
+  const retentionDays = options.retentionDays ?? env.activityLog.retentionDays;
+  const evidenceRetentionDays =
+    options.evidenceRetentionDays ?? env.activityLog.evidenceRetentionDays;
+  const batchSize = Math.max(1, options.batchSize ?? env.activityLog.batchSize);
+
+  const result: PruneResult = {
+    sweepRemoved: 0,
+    evidenceRemoved: 0,
+    sweepBefore: null,
+    evidenceBefore: null,
+  };
+
+  if (retentionDays > 0) {
+    result.sweepBefore = daysAgo(retentionDays);
+    result.sweepRemoved = await deleteInBatches(result.sweepBefore, true, batchSize);
+  }
+
+  // 0 — the default — means the evidence trail is never pruned. Discarding
+  // proof of who changed a meter reading has to be asked for explicitly.
+  if (evidenceRetentionDays > 0) {
+    result.evidenceBefore = daysAgo(evidenceRetentionDays);
+    result.evidenceRemoved = await deleteInBatches(result.evidenceBefore, false, batchSize);
+  }
+
+  return result;
+}
+
+let pruneTimer: NodeJS.Timeout | null = null;
+
+/**
+ * Starts the background sweep: once shortly after boot, then on an interval.
+ *
+ * Called from `server.ts` rather than `createApp`, so the test suite — which
+ * builds the app hundreds of times — never starts a timer or touches the
+ * database on its own. The timer is `unref`'d so it cannot hold a shutdown open.
+ */
+export function startActivityLogPruning(): void {
+  if (!env.activityLog.pruneEnabled || env.isTest || pruneTimer) return;
+
+  const run = () => {
+    void pruneActivityLog()
+      .then((result) => {
+        if (result.sweepRemoved > 0 || result.evidenceRemoved > 0) {
+          logger.info(
+            `Activity log pruned: ${result.sweepRemoved} request entries, ` +
+              `${result.evidenceRemoved} domain entries`
+          );
+        }
+      })
+      // A failed prune is a housekeeping problem, not an outage.
+      .catch((error) => logger.error('Activity log prune failed', error));
+  };
+
+  // A minute after boot, so it never competes with the deploy's first requests.
+  const kickoff = setTimeout(run, 60_000);
+  kickoff.unref();
+
+  pruneTimer = setInterval(run, Math.max(1, env.activityLog.intervalHours) * 60 * 60 * 1000);
+  pruneTimer.unref();
+}
+
+export function stopActivityLogPruning(): void {
+  if (pruneTimer) clearInterval(pruneTimer);
+  pruneTimer = null;
 }
 
 export interface ActivityQuery {

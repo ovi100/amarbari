@@ -85,10 +85,10 @@ model User {
   division      String
 
   // Relationships
-  tenancy      Tenancy?
-  tickets      MaintenanceTicket[]
-  messagesSent ChatMessage[]       @relation("SentMessages")
-  messagesRecv ChatMessage[]       @relation("ReceivedMessages")
+  tenancy       Tenancy?
+  tickets       MaintenanceTicket[]
+  messagesSent  ChatMessage[]       @relation("SentMessages")
+  messagesRecv  ChatMessage[]       @relation("ReceivedMessages")
   // Both are evidence trails, so they outlive the account that created them:
   // the FK is nulled on delete and the actor's name is snapshotted on the row.
   meterReadings MeterReading[]
@@ -374,11 +374,11 @@ model ActivityLog {
 
   /// Verb, e.g. `meter.reading.update`, or `POST /api/v1/admin/flats` for the
   /// catch-all middleware entries.
-  action  String
+  action   String
   /// Model name, e.g. `Meter` — how the log is filtered per record.
-  entity  String
+  entity   String
   entityId String?
-  summary String
+  summary  String
 
   /// Field-level before/after for domain events; null for generic entries.
   before Json?

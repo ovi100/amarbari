@@ -5,6 +5,7 @@ import * as meters from '../controllers/meter.controller';
 import { requireAuth, requireRole } from '../middlewares/auth';
 import { validate } from '../middlewares/validate';
 import {
+  activityPruneSchema,
   activityQuerySchema,
   addColumnSchema,
   adminCreateUserSchema,
@@ -120,6 +121,11 @@ router.delete('/meters/:id', validate(idParamSchema, 'params'), meters.remove);
 
 // --- Activity log ----------------------------------------------------------
 router.get('/activity', validate(activityQuerySchema, 'query'), admin.listActivityLog);
+router.post(
+  '/activity/prune',
+  validate(activityPruneSchema),
+  admin.pruneActivityLogNow
+);
 
 // --- Tenancies -------------------------------------------------------------
 router.post('/tenancies', validate(tenancySchema), admin.createTenancy);

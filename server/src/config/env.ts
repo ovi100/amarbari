@@ -107,6 +107,29 @@ export const env = {
     publicBaseUrl: process.env.UPLOAD_PUBLIC_BASE_URL ?? '/uploads',
   },
 
+  /**
+   * Activity-log retention (SRS 8.12).
+   *
+   * The log gains a row per mutation, so it needs a ceiling — but the two kinds
+   * of entry are not equally disposable. The generic request sweep is
+   * operational noise and ages out; **domain entries are billing evidence** (a
+   * corrected meter reading and who changed it) and are kept indefinitely by
+   * default. Setting the evidence window to a positive number is a deliberate
+   * choice to discard proof, so it has to be typed out.
+   */
+  activityLog: {
+    pruneEnabled: (process.env.ACTIVITY_LOG_PRUNE ?? 'true') !== 'false',
+    /// Generic `POST /api/v1/...` sweep entries older than this are deleted.
+    retentionDays: Number(process.env.ACTIVITY_LOG_RETENTION_DAYS ?? 365),
+    /// Domain entries (`meter.reading.correct`, …). 0 = keep forever.
+    evidenceRetentionDays: Number(process.env.ACTIVITY_LOG_EVIDENCE_RETENTION_DAYS ?? 0),
+    /// Rows per DELETE. Batched so a first prune of a large table never holds
+    /// one long transaction open against production traffic.
+    batchSize: Number(process.env.ACTIVITY_LOG_PRUNE_BATCH ?? 5_000),
+    /// How often the background sweep runs.
+    intervalHours: Number(process.env.ACTIVITY_LOG_PRUNE_INTERVAL_HOURS ?? 24),
+  },
+
   invoice: {
     /// Optional PNG used as the admin digital-signature stamp on invoices.
     signaturePath: process.env.ADMIN_SIGNATURE_PATH ?? '',

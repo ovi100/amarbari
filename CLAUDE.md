@@ -679,6 +679,8 @@ rather than the route.
   to, with its per-meter breakdown. The invoice form pre-fills from this.
 - `GET /api/v1/admin/activity` — The audit trail; shared query contract plus `entity`, `entityId`,
   `actorId`. Admin-only — it names who did what.
+- `POST /api/v1/admin/activity/prune` — Runs the retention policy now (§8.12). Optional
+  `retentionDays` / `evidenceRetentionDays` may only *lengthen* the configured windows.
 
 Open to both roles, mounted at `/api/v1/meters`:
 
@@ -792,6 +794,9 @@ To guarantee end-to-end reliability, security, and smooth user experience across
      onto the invoice; and the monthly/yearly report including its empty months.
    - **Activity log (§8.12):** domain entries carrying before/after; the middleware sweep firing
      exactly once for an uninstrumented write; passwords redacted; and the endpoint being admin-only.
+   - **Retention (§8.12):** request entries ageing out while evidence survives the same sweep;
+     evidence discarded only when a window is set explicitly; batching clearing a table in several
+     passes; and the manual endpoint refusing to prune past the configured floor.
    - **Messaging:** Twilio request shape (basic auth, `From` vs. `MessagingServiceSid`), failure
      reported rather than thrown, and the console fallback when unconfigured.
    - **PDF/JPG Renderer:** Validate that server-rendered buffers output valid PDF/JPG buffers with signatures without memory leaks.
@@ -831,6 +836,7 @@ To guarantee end-to-end reliability, security, and smooth user experience across
 | **Metered Invoice**                 | Generate an invoice for a flat whose meter moved 75 units.                                  | Electricity pre-fills at 750 (75 × 10), the arithmetic is stated under the field, and it stays editable.                |
 | **Resident Scope**                  | A resident opens another unit's meter, or tries to create one.                               | `403` on both. They may only file readings on the meters of the unit they occupy.                                       |
 | **Log Secrecy**                     | Create a user through the admin console, then read the activity log.                        | The entry is there; the password reads `[redacted]` and never appears in plaintext.                                    |
+| **Log Retention**                   | Leave the system running a year, then check the log after the nightly sweep.                 | Request entries older than a year are gone; every meter-reading entry is still there. Evidence ages out only if a window is set. |
 
 ### 7.3 CI/CD Automated Testing Pipeline Workflow (`.github/workflows/test.yml`)
 
@@ -1157,6 +1163,30 @@ Rules worth knowing before changing any of it:
 - Actor names are cached for 5 minutes to keep writes off the hot path, and the cache is dropped when
   an account is edited or deleted so the log never renames somebody retroactively.
 
+**Retention.** The table gains a row per mutation, so it is swept daily in-process
+(`startActivityLogPruning`, started from `server.ts` rather than `createApp` so tests never spin a
+timer). The two kinds of entry are **not** equally disposable:
+
+| Entry | Identified by | Default | Variable |
+| :---- | :------------ | :------ | :------- |
+| Request sweep | Action begins with an HTTP method — `POST /api/v1/…` | Deleted after **365 days** | `ACTIVITY_LOG_RETENTION_DAYS` |
+| Domain entry | Dotted verb — `meter.reading.correct` | **Kept forever** (`0`) | `ACTIVITY_LOG_EVIDENCE_RETENTION_DAYS` |
+
+The split is the point: the sweep is operational noise, while a domain entry is what a disputed
+electricity bill is settled with. Discarding evidence therefore requires typing a positive number;
+no default does it for you.
+
+Three implementation details that matter:
+
+- **Batched deletes** (`ACTIVITY_LOG_PRUNE_BATCH`, 5,000). `deleteMany` cannot be limited, and one
+  unbounded `DELETE` over a year of entries would hold a long transaction against live traffic. Each
+  statement picks its ids in a `LIMIT`ed subquery, so a prune killed half-way has still made progress
+  and the next run resumes.
+- **Idempotent**, so several instances pruning at once is harmless — a row another instance already
+  removed is simply not there.
+- `POST /admin/activity/prune` runs it on demand, but the window is **clamped upward** against the
+  configured policy: a request can prune *less* than the deployment allows, never more.
+
 ## 9. Separated Directory Structure
 
 ```
@@ -1311,6 +1341,7 @@ enter this month's reading on a meter attached to their own unit.
 | Billing | Electricity is computed from the meters and pre-filled on the invoice form, with the arithmetic stated and still editable. | §8.11 |
 | Reports | Per meter, month by month and year by year: units, tariff, amount, closing reading. | §3.2.9 |
 | Activity log | `ActivityLog` + a catch-all middleware sweep; domain entries carry before/after. Admin-only viewer at `/admin/activity`. | §3.2.10, §8.12 |
+| Log retention | Daily in-process prune: request entries age out at a year, meter evidence is kept forever unless a window is set. | §8.12 |
 
 Three decisions worth keeping:
 

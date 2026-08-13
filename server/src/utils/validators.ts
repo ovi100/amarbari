@@ -490,6 +490,16 @@ export const activityQuerySchema = listQuerySchema.extend({
   actorId: z.string().uuid().optional(),
 });
 
+/**
+ * Manual retention sweep. Both windows are in days and are clamped upward
+ * against the configured policy in the controller, so a request can only ever
+ * prune *less* than the deployment allows.
+ */
+export const activityPruneSchema = z.object({
+  retentionDays: z.coerce.number().int().min(1).max(3650).optional(),
+  evidenceRetentionDays: z.coerce.number().int().min(0).max(3650).optional(),
+});
+
 export const userListQuerySchema = listQuerySchema.extend({
   status: z.enum(['pending', 'approved']).optional(),
   role: z.enum(['ADMIN', 'USER']).optional(),
