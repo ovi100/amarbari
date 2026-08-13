@@ -1163,6 +1163,27 @@ Rules worth knowing before changing any of it:
 - Actor names are cached for 5 minutes to keep writes off the hot path, and the cache is dropped when
   an account is edited or deleted so the log never renames somebody retroactively.
 
+**Reachability — row level security.** Supabase publishes the `public` schema through PostgREST, an
+auto-generated REST API reachable with the project's **anon key**. That key ships inside the frontend
+bundle, so it is public by construction, and RLS is the only thing standing between it and the tables.
+`20260813190000_enable_rls` enables RLS on **every** table and revokes the `anon` / `authenticated`
+grants. The linter named `ActivityLog` and it is the worst case — a readable account of who did what to
+whom, with before/after values — but `User` carries phone, identity number and address, and the fix is
+portfolio-wide rather than per table.
+
+**No policies are written, and that is the design**, not an unfinished job:
+
+- The API never uses PostgREST. Prisma connects as the tables' owner, and RLS does not apply to the
+  owner unless `FORCE ROW LEVEL SECURITY` is set. It deliberately is not, so the backend is unaffected.
+- Authorization already lives in the JWT/RBAC middleware. Per-row policies would be a second, parallel
+  system — and a non-functioning one: accounts authenticate against our own JWTs, not Supabase Auth, so
+  `auth.uid()` is null on every request and every policy would evaluate false regardless.
+
+The `ALTER DEFAULT PRIVILEGES` half of that migration is the part to keep in mind when adding a table:
+without it, Supabase's default grants would hand `anon` full access to the *next* table a migration
+creates, and the fix would quietly stop covering new tables. It is written to skip cleanly on a plain
+Postgres, where the `anon` role does not exist — which is what local dev and CI run against.
+
 **Retention.** The table gains a row per mutation, so it is swept daily in-process
 (`startActivityLogPruning`, started from `server.ts` rather than `createApp` so tests never spin a
 timer). The two kinds of entry are **not** equally disposable:
@@ -1358,6 +1379,23 @@ Three decisions worth keeping:
 the shops migration — the CHECK constraints have to exist from the moment the tables do. Like its
 predecessor it has **not been run against a live database**; there is no Postgres in this development
 environment, so the meter API specs self-skipped locally and assert in CI.
+
+### 2026-08-13 — Row level security enabled
+
+A Supabase lint reported RLS disabled on `public.ActivityLog`. It was disabled on all twelve tables —
+nothing before `20260813190000_enable_rls` touched it — which left the audit log, and `User`'s phone,
+identity and address columns, readable over PostgREST with the anon key that ships in the frontend
+bundle.
+
+RLS is now on everywhere, with **no policies at all**, and the `anon` / `authenticated` grants revoked
+including the schema defaults that would otherwise re-grant the next table created. Prisma connects as
+the table owner and `FORCE ROW LEVEL SECURITY` is not set, so the API is unaffected; authorization stays
+in the JWT/RBAC middleware rather than being half-restated in policies that `auth.uid()` could never
+satisfy. Reasoning in §8.12.
+
+**Migration note:** hand-written, like its two predecessors, and likewise **not run against a live
+database** — there is still no Postgres in this development environment. The `anon`-role block is
+guarded so `migrate reset` works on the plain Postgres that CI uses.
 
 ---
 
