@@ -115,6 +115,15 @@ export function describeUnitOrNull(record: {
   return null;
 }
 
+/**
+ * "flat A-101" / "shop S-01 · Rahim Store" — the label with its category, for
+ * messages that have to read as prose. A bare label leaves an error saying
+ * "already assigned to T-36" without saying what T-36 is.
+ */
+export function unitPhrase(unit: UnitSummary): string {
+  return `${unit.category === 'FLAT' ? 'flat' : 'shop'} ${unit.label}`;
+}
+
 /** `{ flatId: id }` or `{ shopId: id }` — for where-clauses and writes. */
 export function unitRef(category: RentCategory, id: string) {
   return category === 'FLAT' ? { flatId: id } : { shopId: id };

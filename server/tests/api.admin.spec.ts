@@ -383,10 +383,10 @@ describe('user approval centre (SRS 3.2.2)', () => {
         familyMembers: 1,
         identityType: 'NID',
         identityNumber: String(Date.now()).padStart(13, '8').slice(-13),
-        village: 'V',
-        postOffice: 'P',
+        village: 'Village Road',
+        postOffice: 'Mirpur',
         district: 'Dhaka',
-        policeStation: 'T',
+        policeStation: 'Pallabi',
         division: 'Dhaka',
       })
       .expect(409);
@@ -615,7 +615,7 @@ describe('analytics & export (SRS 3.2.3 / 3.2.4)', () => {
       .expect('Content-Type', /text\/csv/);
 
     const csv = res.text;
-    expect(csv).toContain('Flat,Building,Tenant,Period');
+    expect(csv).toContain('Type,Unit,Building / Address,User,Period');
     expect(csv).toContain('Expenses');
     expect(csv.split('\r\n').length).toBeGreaterThan(5);
   });
@@ -671,7 +671,7 @@ describe('analytics & export (SRS 3.2.3 / 3.2.4)', () => {
       .expect(200);
 
     // Header + 1,008 invoice rows + the expense block.
-    const dataRows = res.text.split('\r\n').filter((l) => l.startsWith('T-'));
+    const dataRows = res.text.split('\r\n').filter((l) => l.startsWith('FLAT,T-'));
     expect(dataRows.length).toBe(1008);
   }, 120_000);
 });
@@ -786,7 +786,7 @@ describe('shops — the commercial rent category', () => {
         address: '1 Somewhere Road, Dhaka',
         baseRent: 1000,
       })
-      .expect(500); // unique violation surfaces from the database
+      .expect(409); // P2002 is mapped to a conflict by the error handler
 
     await request(app)
       .post('/api/v1/admin/shops')

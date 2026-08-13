@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 import { Role } from '@prisma/client';
 import prisma from '../utils/prisma';
+import { logger } from '../utils/logger';
 import { recordActivity, sanitiseForLog } from '../services/activity.service';
 
 /**
@@ -100,6 +101,23 @@ export function forgetCachedActor(userId: string) {
   nameCache.delete(userId);
 }
 
+/**
+ * Audit writes are detached from the request, so something has to hold onto
+ * them: on shutdown, so the last few entries are not lost with the process, and
+ * in tests, so an assertion is not racing a write that has not landed yet.
+ */
+const inFlight = new Set<Promise<void>>();
+
+function track(promise: Promise<void>) {
+  inFlight.add(promise);
+  void promise.finally(() => inFlight.delete(promise));
+}
+
+/** Settles every audit write currently in flight. */
+export async function flushAuditWrites(): Promise<void> {
+  await Promise.allSettled([...inFlight]);
+}
+
 export function auditRequests(req: Request, res: Response, next: NextFunction) {
   if (!AUDITED_METHODS.has(req.method) || SKIPPED_PATHS.some((p) => req.path.startsWith(p))) {
     return next();
@@ -122,22 +140,39 @@ export function auditRequests(req: Request, res: Response, next: NextFunction) {
     const { entity, entityId } = describeRoute(req.path);
     const action = `${req.method} ${req.baseUrl}${req.path}`;
 
-    void (async () => {
-      await recordActivity({
-        actor: {
-          id: req.user?.id ?? null,
-          name: req.user ? await actorName(req.user.id) : 'Anonymous',
-          role: req.user?.role ?? Role.USER,
-        },
-        action,
-        entity,
-        entityId,
-        summary: `${req.method} ${req.baseUrl}${req.path} → ${res.statusCode}`,
-        after: body,
-        before: hasQuery ? { query } : undefined,
-        ip: req.ip ?? null,
-      });
-    })();
+    // The response has already been sent, so this runs detached. Two things
+    // follow, and both matter in production:
+    //
+    // 1. It must catch everything. `recordActivity` swallows its own failures,
+    //    but the actor lookup happens while building its argument — an
+    //    unhandled rejection there takes the whole process down under Node's
+    //    default `--unhandled-rejections=throw`. A missing log line must never
+    //    cost an API instance.
+    // 2. It must be awaitable, or a write in flight is lost when the process
+    //    exits (and, in tests, lands during the following case).
+    track(
+      (async () => {
+        try {
+          const name = req.user ? await actorName(req.user.id) : 'Anonymous';
+          await recordActivity({
+            actor: {
+              id: req.user?.id ?? null,
+              name,
+              role: req.user?.role ?? Role.USER,
+            },
+            action,
+            entity,
+            entityId,
+            summary: `${req.method} ${req.baseUrl}${req.path} → ${res.statusCode}`,
+            after: body,
+            before: hasQuery ? { query } : undefined,
+            ip: req.ip ?? null,
+          });
+        } catch (error) {
+          logger.error('Audit sweep failed for', action, error);
+        }
+      })()
+    );
   });
 
   next();

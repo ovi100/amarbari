@@ -6,6 +6,7 @@ import prisma from './utils/prisma';
 import { closeKeyValueStore, initKeyValueStore } from './utils/keyValueStore';
 import { closeSockets, initSockets } from './sockets';
 import { startActivityLogPruning, stopActivityLogPruning } from './services/activity.service';
+import { flushAuditWrites } from './middlewares/audit';
 
 async function main() {
   await initKeyValueStore();
@@ -28,6 +29,9 @@ async function main() {
     logger.info(`${signal} received — shutting down`);
     stopActivityLogPruning();
     server.close();
+    // Audit entries are written after their response has been sent, so the
+    // last few would otherwise die with the process.
+    await flushAuditWrites();
     await closeSockets();
     await closeKeyValueStore();
     await prisma.$disconnect();

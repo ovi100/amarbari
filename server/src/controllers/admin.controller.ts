@@ -19,7 +19,7 @@ import {
 } from '../services/dynamicTable.service';
 import { calculateTenancyDuration } from '../services/rent.service';
 import { identityNumberError } from '../utils/validators';
-import { describeUnit } from '../services/unit.service';
+import { describeUnit, unitPhrase } from '../services/unit.service';
 import { assertMeterAvailable, assignMeter, metersForUnit } from '../services/meter.service';
 import { listActivity, pruneActivityLog } from '../services/activity.service';
 import { forgetCachedActor } from '../middlewares/audit';
@@ -381,7 +381,7 @@ export const assignFlat = asyncHandler(async (req: Request, res: Response) => {
     }
     if (existingForUser?.isActive) {
       const held = describeUnit(existingForUser);
-      throw ApiError.conflict(`${user.fullName} is already assigned to ${held.label}`);
+      throw ApiError.conflict(`${user.fullName} is already assigned to ${unitPhrase(held)}`);
     }
 
     // A previous, ended tenancy occupies the unique userId slot — reuse it.
@@ -589,7 +589,7 @@ export const assignShop = asyncHandler(async (req: Request, res: Response) => {
     }
     if (existingForUser?.isActive) {
       const held = describeUnit(existingForUser);
-      throw ApiError.conflict(`${user.fullName} is already assigned to ${held.label}`);
+      throw ApiError.conflict(`${user.fullName} is already assigned to ${unitPhrase(held)}`);
     }
 
     // A previous, ended tenancy occupies the unique userId slot — reuse it,

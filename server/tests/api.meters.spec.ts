@@ -3,6 +3,7 @@ import request from 'supertest';
 import { createApp } from '../src/app';
 import { databaseAvailable, prisma, resetDatabase } from './helpers/db';
 import { pruneActivityLog } from '../src/services/activity.service';
+import { flushAuditWrites } from '../src/middlewares/audit';
 import {
   bearer,
   createAdmin,
@@ -474,8 +475,9 @@ describe('activity log (SRS 3.2.10)', () => {
       .send({ flatNumber: 'L-1', floor: 1, building: 'Main Building', baseRent: 12000 })
       .expect(201);
 
-    // res.on('finish') fires after the response is sent, so give it a tick.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The sweep writes after the response has been sent — wait for it rather
+    // than sleeping and hoping.
+    await flushAuditWrites();
 
     const entries = await prisma.activityLog.findMany({ where: { entity: 'Flat' } });
     expect(entries).toHaveLength(1);
@@ -505,7 +507,7 @@ describe('activity log (SRS 3.2.10)', () => {
       })
       .expect(201);
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await flushAuditWrites();
 
     const entries = await prisma.activityLog.findMany({ where: { entity: 'User' } });
     expect(entries.length).toBeGreaterThan(0);
@@ -550,8 +552,12 @@ describe('activity log retention (SRS 8.12)', () => {
     expect(result.sweepRemoved).toBe(2);
     expect(result.evidenceRemoved).toBe(0);
 
-    const left = await prisma.activityLog.findMany({ orderBy: { action: 'asc' } });
-    expect(left.map((e) => e.action)).toEqual([
+    // Sorted in JS, not by the database: Postgres orders under the server's
+    // collation, which ignores case and punctuation, so `meter.…` sorts before
+    // `POST …` there and after it here. The assertion is about which rows
+    // survived, not about anybody's collation.
+    const left = await prisma.activityLog.findMany();
+    expect(left.map((e) => e.action).sort()).toEqual([
       'POST /api/v1/admin/flats',
       'meter.reading.correct',
       'meter.reading.record',
