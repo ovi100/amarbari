@@ -436,42 +436,50 @@ export default function DataControlPage() {
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <span>
-                      {pagination.total} records · page {pagination.page} of {pagination.totalPages}
+                      {pagination.total} records
+                      {/* · page {pagination.page} of {pagination.totalPages} */}
                     </span>
-                    <Select
-                      aria-label="Rows per page"
-                      value={String(pageSize)}
-                      onChange={(e) => {
-                        setPageSize(Number(e.target.value));
-                        setPage(1);
-                      }}
-                      className="h-8 w-auto py-0 text-xs sm:h-8"
-                    >
-                      {[10, 25, 50, 100].map((size) => (
-                        <option key={size} value={size}>
-                          {size} / page
-                        </option>
-                      ))}
-                    </Select>
+                    {pagination.totalPages > 1 && (
+                      <Select
+                        aria-label="Rows per page"
+                        value={String(pageSize)}
+                        onChange={(e) => {
+                          setPageSize(Number(e.target.value));
+                          setPage(1);
+                        }}
+                        className="h-8 w-auto py-0 text-xs sm:h-8"
+                      >
+                        {[10, 25, 50, 100].map((size) => (
+                          <option key={size} value={size}>
+                            {size} / page
+                          </option>
+                        ))}
+                      </Select>
+                    )}
                   </div>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={page <= 1}
-                      onClick={() => setPage((p) => p - 1)}
-                    >
-                      Previous
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={page >= pagination.totalPages}
-                      onClick={() => setPage((p) => p + 1)}
-                    >
-                      Next
-                    </Button>
-                  </div>
+                  {pagination.totalPages > 1 && (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={page <= 1}
+                        onClick={() => setPage((p) => p - 1)}
+                      >
+                        Previous
+                      </Button>
+                      <span className="text-sm tabular-nums text-muted-foreground">
+                        {pagination.page} / {pagination.totalPages}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={page >= pagination.totalPages}
+                        onClick={() => setPage((p) => p + 1)}
+                      >
+                        Next
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
             </>

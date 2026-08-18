@@ -261,7 +261,7 @@ export default function UsersPage() {
         sortValue: (user) => (user.isApproved ? 'Approved' : 'Pending'),
         cell: (user) => (
           <div className="flex flex-col items-start gap-1">
-            <Badge variant={user.isApproved ? 'success' : 'warning'}>
+            <Badge variant={user.isApproved ? 'success' : 'destructive'}>
               {user.isApproved ? 'Approved' : 'Pending'}
             </Badge>
             {!user.isPhoneVerified && <Badge variant="destructive">Phone unverified</Badge>}

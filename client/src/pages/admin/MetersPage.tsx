@@ -99,11 +99,11 @@ export default function MetersPage() {
       return editor?.meter
         ? adminApi.updateMeter(editor.meter.id, payload)
         : adminApi.createMeter({
-            ...payload,
-            ...(values.unitId && values.category
-              ? { category: values.category, unitId: values.unitId }
-              : {}),
-          });
+          ...payload,
+          ...(values.unitId && values.category
+            ? { category: values.category, unitId: values.unitId }
+            : {}),
+        });
     },
     onSuccess: () => {
       toast.success(editor?.meter ? 'Meter updated' : 'Meter added');
@@ -180,13 +180,13 @@ export default function MetersPage() {
   const assignableUnits =
     assignCategory === 'SHOP'
       ? (shops.data ?? []).map((shop) => ({
-          id: shop.id,
-          label: `${shop.shopNumber} · ${shop.shopName}`,
-        }))
+        id: shop.id,
+        label: `${shop.shopNumber} · ${shop.shopName}`,
+      }))
       : (flats.data ?? []).map((flat) => ({
-          id: flat.id,
-          label: `${flat.flatNumber} — ${flat.building}`,
-        }));
+        id: flat.id,
+        label: `${flat.flatNumber} — ${flat.building}`,
+      }));
 
   const columns = useMemo<DataTableColumn<MeterView>[]>(
     () => [
@@ -232,13 +232,14 @@ export default function MetersPage() {
       {
         id: 'rate',
         header: 'Per unit',
-        align: 'right',
+        align: 'center',
         sortValue: (meter) => meter.effectiveRate,
         cell: (meter) => (
           <span className="tabular-nums">
             {formatMoney(meter.effectiveRate)}
             {meter.perUnitRate === null && (
-              <span className="ml-1 text-xs text-muted-foreground">default</span>
+              <p className="text-xs text-muted-foreground">default</p>
+              // <span className="ml-1 text-xs text-muted-foreground">default</span>
             )}
           </span>
         ),

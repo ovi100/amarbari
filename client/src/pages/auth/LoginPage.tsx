@@ -72,7 +72,7 @@ export default function LoginPage() {
             type="tel"
             inputMode="tel"
             autoComplete="tel"
-            placeholder="01712345678"
+            placeholder="Enter your phone number"
             aria-invalid={Boolean(errors.phone)}
             {...register('phone')}
           />
@@ -82,7 +82,7 @@ export default function LoginPage() {
           <PasswordInput
             id="password"
             autoComplete="current-password"
-            placeholder="••••••••"
+            placeholder="Enter your password"
             aria-invalid={Boolean(errors.password)}
             {...register('password')}
           />

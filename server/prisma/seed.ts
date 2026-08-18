@@ -3,14 +3,15 @@ import { IdentityType, IssueCategory, PaymentStatus, PrismaClient, Role, TicketS
 
 const prisma = new PrismaClient();
 
-const ADMIN_PHONE = process.env.SEED_ADMIN_PHONE ?? '+8801700000000';
-const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD ?? 'Admin@12345';
-const TENANT_PASSWORD = process.env.SEED_TENANT_PASSWORD ?? 'Tenant@12345';
+const ADMIN_PHONE = process.env.SEED_ADMIN_PHONE ?? '+8801675600270';
+const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD ?? '12345';
+const TENANT_PASSWORD = process.env.SEED_TENANT_PASSWORD ?? '12345';
 
 const money = (n: number) => Math.round(n * 100) / 100;
 
 async function main() {
   console.log('Seeding AmarBari…');
+  // console.log(`  Admin   ${ADMIN_PHONE} / ${ADMIN_PASSWORD}`);
 
   const adminHash = await bcrypt.hash(ADMIN_PASSWORD, 12);
   const tenantHash = await bcrypt.hash(TENANT_PASSWORD, 12);
@@ -19,20 +20,20 @@ async function main() {
     where: { phone: ADMIN_PHONE },
     update: { passwordHash: adminHash, role: Role.ADMIN, isApproved: true, isPhoneVerified: true },
     create: {
-      fullName: 'Rahman Property Admin',
+      fullName: 'Abu Sayed',
       phone: ADMIN_PHONE,
       passwordHash: adminHash,
       role: Role.ADMIN,
       isApproved: true,
       isPhoneVerified: true,
-      dob: new Date('1978-04-12'),
+      dob: new Date('1994-12-12'),
       familyMembers: 4,
       identityType: IdentityType.NID,
       identityNumber: '1978041200011',
-      village: 'Uttara Sector 7',
-      postOffice: 'Uttara Model Town',
-      district: 'Dhaka',
-      policeStation: 'Uttara West',
+      village: 'Sonamia Market, Adamjeenagar',
+      postOffice: '1431',
+      district: 'Narayangonj',
+      policeStation: 'Shiddirgonj',
       division: 'Dhaka',
     },
   });
@@ -63,8 +64,8 @@ async function main() {
   // Two shops so the commercial side of the portfolio is not empty on a fresh
   // install. Assignment is left to the admin, as it is for flats.
   const shopSpecs = [
-    { shopNumber: 'S-01', shopName: 'Rahim General Store', address: '12 Mirpur Road, Dhaka', baseRent: 32000 },
-    { shopNumber: 'S-02', shopName: 'Nila Tailors', address: '14 Mirpur Road, Dhaka', baseRent: 26000 },
+    { shopNumber: 'S-01', shopName: 'Harun Store', address: 'Sonamia Market, Adamjeenagar', baseRent: 6000 },
+    { shopNumber: 'S-02', shopName: 'Nabi Tea Store', address: 'Sonamia Market, Adamjeenagar', baseRent: 3000 },
   ];
 
   const shops = [];

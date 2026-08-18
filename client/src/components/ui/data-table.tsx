@@ -31,7 +31,7 @@ export interface DataTableColumn<T> {
   sortValue?: (row: T) => string | number | boolean | null | undefined;
   /** Overrides `sortValue` when the exported text should differ from the sort key. */
   exportValue?: (row: T) => string | number | null | undefined;
-  align?: 'left' | 'right';
+  align?: 'left' | 'right' | 'center';
   className?: string;
 }
 
@@ -390,41 +390,44 @@ export function DataTable<T>({
               ? 'No records'
               : `${(currentPage - 1) * pageSize + 1}–${Math.min(currentPage * pageSize, sorted.length)} of ${sorted.length}`}
           </span>
-          <Select
-            aria-label="Rows per page"
-            value={String(pageSize)}
-            onChange={(e) => setPageSize(Number(e.target.value))}
-            className="h-8 w-auto py-0 text-xs sm:h-8"
-          >
-            {PAGE_SIZES.map((size) => (
-              <option key={size} value={size}>
-                {size} / page
-              </option>
-            ))}
-          </Select>
+          {PAGE_SIZES.length > 10 && (
+            <Select
+              aria-label="Rows per page"
+              value={String(pageSize)}
+              onChange={(e) => setPageSize(Number(e.target.value))}
+              className="h-8 w-auto py-0 text-xs sm:h-8"
+            >
+              {PAGE_SIZES.map((size) => (
+                <option key={size} value={size}>
+                  {size} / page
+                </option>
+              ))}
+            </Select>
+          )}
         </div>
-
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={currentPage <= 1}
-            onClick={() => setPage(currentPage - 1)}
-          >
-            <ChevronLeft className="h-3.5 w-3.5" /> Previous
-          </Button>
-          <span className="text-sm tabular-nums text-muted-foreground">
-            {currentPage} / {totalPages}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={currentPage >= totalPages}
-            onClick={() => setPage(currentPage + 1)}
-          >
-            Next <ChevronRight className="h-3.5 w-3.5" />
-          </Button>
-        </div>
+        {PAGE_SIZES.length > 10 && (
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage <= 1}
+              onClick={() => setPage(currentPage - 1)}
+            >
+              <ChevronLeft className="h-3.5 w-3.5" /> Previous
+            </Button>
+            <span className="text-sm tabular-nums text-muted-foreground">
+              {currentPage} / {totalPages}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage >= totalPages}
+              onClick={() => setPage(currentPage + 1)}
+            >
+              Next <ChevronRight className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );
